@@ -1,0 +1,155 @@
+# Evaluates modules/nixagent.nix for real against `lib.evalModules` and asserts what it resolves --
+# the same "Nix inspecting Nix" tier as nixsh's checks/tools-eval.nix, and here for the same reason
+# that file states: `nix flake check` does NOT evaluate `systemManagerModules` on its own, so a
+# green check on this repo without a file like this one would prove nothing but flake syntax.
+#
+# Deliberately pkgs-FREE beyond `pkgs.emptyFile` for the derivation shell. Every question this
+# repo can actually answer at eval time is a question about NAMES and LISTS -- which group a key
+# belongs to, which side of the pacman/AUR split a name lands on for a given distro, whether the
+# nixpkgs prohibition still holds -- and none of them needs a package set. Unlike its siblings this
+# repo has no nixpkgs-resolution half to check at all: `nixpkgs = null` everywhere is the policy,
+# and asserting THAT is one of the checks below rather than something a real `pkgs` would help with.
+#
+# What can NOT be proven here, and is not pretended: whether `claude-code` is in a given
+# repository today. That is a fact about the world, it changes without this repo changing, and it
+# is verified out of band against live sources -- see ../experiments/verify-package-names.sh.
+{ pkgs, lib ? pkgs.lib }:
+let
+  cat = import ../lib/agents.nix { };
+
+  evalWith = selection: (lib.evalModules {
+    modules = [ ../modules/nixagent.nix { nixagent = selection; } ];
+  }).config.nixagent;
+
+  allClients = lib.attrNames cat.cli;
+
+  # The whole catalogue, on each of the two distro answers. Both fixtures matter: the arch/AUR
+  # split is not a property of the catalogue alone here, it is a property of the catalogue AND the
+  # host, so a check that only ever evaluated one of them would leave half the resolution untested.
+  archAll = evalWith { cli = allClients; distro = "arch"; };
+  cachyAll = evalWith { cli = allClients; distro = "cachyos"; };
+
+  empty = evalWith { };
+
+  has = list: item: lib.elem item list;
+  sorted = lib.sort (a: b: a < b);
+
+  results = {
+    # ── The floor: nothing selected must produce nothing at all ────────────────────────────────
+    "empty selection resolves to nothing selected" =
+      empty.selected == [ ];
+
+    "empty selection produces empty package lists on BOTH sides, not one populated by default" =
+      empty.archPackages == [ ] && empty.aurPackages == [ ] && empty.binaries == { };
+
+    # ── THE LOAD-BEARING INVARIANT ────────────────────────────────────────────────────────────
+    # One AUR name reaching a pacman list aborts the entire pacman transaction ("target not
+    # found") and takes every unrelated package in the same converge down with it. Asserted on
+    # both distro answers, because that is exactly where an entry can move between the lists.
+    "archPackages and aurPackages never intersect -- the whole-transaction abort this split exists to prevent (distro = arch)" =
+      lib.intersectLists archAll.archPackages archAll.aurPackages == [ ];
+
+    "archPackages and aurPackages never intersect (distro = cachyos)" =
+      lib.intersectLists cachyAll.archPackages cachyAll.aurPackages == [ ];
+
+    "every selection lands on exactly one of the two lists -- none silently dropped, none counted twice (both distros)" =
+      lib.length (archAll.archPackages ++ archAll.aurPackages) == lib.length allClients
+      && lib.length (cachyAll.archPackages ++ cachyAll.aurPackages) == lib.length allClients;
+
+    # ── Group wiring ──────────────────────────────────────────────────────────────────────────
+    # Hand-listed groups in modules/nixagent.nix are cheap and readable; the failure they invite
+    # is a catalogue group that never gets an option. This closes it: adding a group to
+    # lib/agents.nix without wiring it fails the check rather than resolving to nothing forever.
+    "every catalogue group has a matching selection option on the module" =
+      lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
+
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 4 = 4)" =
+      lib.length archAll.selected == 4
+      && lib.length archAll.selected == lib.length allClients;
+
+    "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
+      # `evalModules` is lazy: `tryEval` alone forces only WHNF (the attrset exists), never the
+      # type-checked value inside. `deepSeq` forces through, which is what actually runs the
+      # listOf-enum merge that rejects the name.
+      (builtins.tryEval (builtins.deepSeq (evalWith { cli = [ "lmstudio-bin" ]; }).cli true)).success == false;
+
+    # ── THE REPO'S REASON TO EXIST, MECHANISED ────────────────────────────────────────────────
+    # These tools self-update and nixpkgs lags them (measured -- see lib/agents.nix's header), so
+    # the catalogue installs from pacman/AUR and never from nixpkgs. Asserted over the RAW
+    # catalogue rather than a selection, so an entry that is not yet selectable anywhere is still
+    # covered the moment it is written.
+    "every catalogue entry carries nixpkgs = null -- the AUR/pacman-never-nixpkgs policy, enforced rather than merely documented" =
+      lib.all (t: t ? nixpkgs && t.nixpkgs == null)
+        (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat));
+
+    "the module publishes no nixpkgs-facing option at all -- no nixosPackages, no unavailableOnNixos; there is no NixOS backend to feed and a half-built one would be worse than none" =
+      let o = evalWith { }; in
+      !(o ? nixosPackages) && !(o ? unavailableOnNixos) && !(o ? nixpkgsPackages);
+
+    # ── The distro-dependent entry ────────────────────────────────────────────────────────────
+    # claude-code is in no upstream Arch repository (archlinux.org search: 0 results) but IS in
+    # CachyOS's own repo and in the AUR. It is the only entry whose correct list depends on the
+    # host, and the reason `archRepoOn`/`nixagent.distro` exist -- so pin the behaviour here where
+    # a future edit cannot quietly undo it.
+    "claude-code is AUR on plain Arch -- the safe floor, since upstream Arch packages it nowhere" =
+      has archAll.aurPackages "claude-code" && !(has archAll.archPackages "claude-code");
+
+    "claude-code moves to the pacman list on a distro whose own repository carries it" =
+      has cachyAll.archPackages "claude-code" && !(has cachyAll.aurPackages "claude-code");
+
+    "the default distro is the recoverable one: a host that declares nothing gets claude-code from the AUR, never a pacman target that may not resolve" =
+      let d = evalWith { cli = [ "claude-code" ]; }; in
+      d.aurPackages == [ "claude-code" ] && d.archPackages == [ ];
+
+    "`archRepoOn` is scoped to the entry that needs it -- it does not leak an official-repo claim onto the rest of the catalogue on ANY distro" =
+      sorted cachyAll.aurPackages == [ ]
+      && sorted archAll.aurPackages == [ "claude-code" ];
+
+    "the three upstream-Arch entries stay on the pacman list regardless of distro -- their repository membership is not derivative-dependent" =
+      lib.all (n: has archAll.archPackages n && has cachyAll.archPackages n)
+        [ "gemini-cli" "openai-codex" "opencode" ];
+
+    # ── Package name vs command name ──────────────────────────────────────────────────────────
+    # Three of the four disagree. A consumer aliasing, wrapping or launching by the PACKAGE name
+    # gets a command that does not exist, which is what `binaries` is published to prevent.
+    "binaries maps every selection to its real command, not its package name" =
+      archAll.binaries == {
+        claude-code = "claude";
+        gemini-cli = "gemini";
+        openai-codex = "codex";
+        opencode = "opencode";
+      };
+
+    "the codex package/command divergence is pinned in both directions -- the pacman name is openai-codex, the command is codex, and neither is usable in the other's place" =
+      has archAll.archPackages "openai-codex"
+      && !(has archAll.archPackages "codex")
+      && archAll.binaries.openai-codex == "codex";
+
+    "binaries covers exactly the selection, no more -- an unselected entry contributes no command" =
+      let d = evalWith { cli = [ "opencode" ]; }; in
+      d.binaries == { opencode = "opencode"; };
+
+    # ── Catalogue integrity ───────────────────────────────────────────────────────────────────
+    "every catalogue entry names both a package and a command -- a missing `binary` would make `nixagent.binaries` silently wrong rather than absent" =
+      lib.all (t: t ? arch && t ? binary && lib.isString t.arch && lib.isString t.binary)
+        (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat));
+
+    "`archRepoOn` only ever appears on an entry that is AUR-only upstream -- on an official-repo entry it would be a no-op that reads like a promise" =
+      lib.all (t: !(t ? archRepoOn) || (t.aur or false))
+        (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat));
+
+    "every `archRepoOn` names a distro `nixagent.distro` can actually be set to -- a typo'd derivative would silently never match" =
+      lib.all (d: lib.elem d [ "arch" "cachyos" ])
+        (lib.concatMap (t: t.archRepoOn or [ ])
+          (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat)));
+  };
+
+  failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);
+in
+if failed == [ ]
+then pkgs.emptyFile
+else
+  throw ''
+    nixagent: agents-eval check failed. Failing assertions:
+    ${lib.concatMapStringsSep "\n" (f: "  - ${f}") failed}
+  ''
