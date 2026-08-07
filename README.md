@@ -1,18 +1,21 @@
 # nixagent
 
-**Agentic AI CLIs — Claude Code, Gemini CLI, Codex, opencode — declared per host, on the hosts that
-actually want them, and installed from pacman/AUR rather than nixpkgs because they update
-themselves.**
+**Agentic AI clients — Claude Code, Claude Cowork, Gemini CLI, Codex, opencode — declared per host,
+on the hosts that actually want them, and installed from pacman/AUR rather than nixpkgs because
+they update themselves.**
 
 ## What this is
 
-A platform-neutral catalogue (`lib/agents.nix`) naming each agent CLI's package identity and its
+A platform-neutral catalogue (`lib/agents.nix`) naming each agent client's package identity and its
 real command name, plus one module (`modules/nixagent.nix`) that resolves a selection into two
-lists a host's Arch package reconciler can consume:
+lists a host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries) and
+`desktop` (Electron windows) — both share the same delivery problem below, only the interface
+differs.
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
 nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" ];
+nixagent.desktop = [ "claude-cowork-linux" ];
 
 nixarch.packages.pacman = config.nixagent.archPackages;
 nixarch.packages.aur    = config.nixagent.aurPackages;
@@ -50,16 +53,17 @@ output**: not a gap to fill later, but the boundary the repo was drawn for.
 
 ## Why these are not nixllm's, and not nixsh's
 
-Package delivery in this family is split by **domain**, and these four had no owner.
+Package delivery in this family is split by **domain**, and these clients had no owner.
 
 **Not [nixllm](https://github.com/julian-corbet/nixllm-corbet-ch).** That repo *serves* models — a
-broker, an inference engine, a model store, a GPU. Everything here is an HTTPS client that never
-loads a weight and has no opinion about a GPU. Same project space, opposite side of the wire, and a
-shared catalogue would mean one repo whose entries need two unrelated kinds of host to be useful.
+broker, an inference engine, a model store, a GPU. Everything here, `desktop` group included, is an
+HTTPS client that never loads a weight and has no opinion about a GPU. Same project space, opposite
+side of the wire, and a shared catalogue would mean one repo whose entries need two unrelated kinds
+of host to be useful.
 
-**Not [nixsh](https://github.com/julian-corbet/nixsh-corbet-ch)**, despite these being terminal
-tools. nixsh is universal *by construction* — every host has a shell and reaches for a terminal
-tool, which is exactly why that catalogue has no per-host story to build. These do not have that
+**Not [nixsh](https://github.com/julian-corbet/nixsh-corbet-ch)**, despite most of these being
+terminal tools. nixsh is universal *by construction* — every host has a shell and reaches for a
+terminal tool, which is exactly why that catalogue has no per-host story to build. These do not have that
 property and must not inherit it: a small production server has a shell and wants `ripgrep`, and
 emphatically does not want a self-updating agent CLI and its runtime. "Runs in a terminal" is a
 shape; nixsh's claim is the *domain* "every host needs this", and these fail it.
@@ -67,8 +71,13 @@ shape; nixsh's claim is the *domain* "every host needs this", and these fail it.
 The placement rule, stated in `lib/agents.nix`'s own header so the next candidate is decidable
 rather than argued:
 
-> Does the tool drive a model it does not host, from a terminal, with no window of its own? Yes →
-> here. No → whichever repo owns the thing it actually is.
+> Does the tool drive a remote frontier model it does not host, delivered as a package that
+> self-updates faster than nixpkgs tracks it? Yes → here, catalogued as `cli` or `desktop` by
+> whichever interface it actually has. No → whichever repo owns the thing it actually is.
+
+Whether the tool opens a terminal or a window is *not* the eligibility test — see
+[`studies/claude-cowork-is-a-desktop-app-not-a-cli.md`](studies/claude-cowork-is-a-desktop-app-not-a-cli.md)
+for why that clause was dropped from it.
 
 ## The AUR/pacman split, and why it is not the same answer on every host
 
@@ -98,7 +107,7 @@ Write-up with the full evidence:
 
 ## Package name ≠ command name
 
-Three of the four disagree, so `nixagent.binaries` publishes the mapping. Pointing an alias, a
+Four of the five disagree, so `nixagent.binaries` publishes the mapping. Pointing an alias, a
 wrapper or a home-manager config at the *package* name gets you a command that does not exist.
 
 | Selection | pacman package | command |
@@ -107,16 +116,13 @@ wrapper or a home-manager config at the *package* name gets you a command that d
 | `gemini-cli` | `gemini-cli` | `gemini` |
 | `openai-codex` | `openai-codex` | `codex` |
 | `opencode` | `opencode` | `opencode` |
+| `claude-cowork-linux` | `claude-cowork-linux` | `claude-cowork` |
 
 ## What this does not own
 
 - **Configuration of the agents themselves** — API keys, model choice, MCP servers, permission
   rules. This repo installs binaries and publishes names; per-user agent config is home-manager's
   job, and lives wherever the consumer already keeps it.
-- **Desktop applications.** `claude-cowork-linux` was evaluated and excluded: it depends on
-  `electron` and installs a `.desktop` entry with `Type=Application` and `StartupWMClass=Claude`,
-  where every catalogued entry installs a `/usr/bin/` binary and nothing else. See
-  [`studies/claude-cowork-is-a-desktop-app-not-a-cli.md`](studies/claude-cowork-is-a-desktop-app-not-a-cli.md).
 - **Local inference of any kind** — engines, model runners, weight converters. Those load weights,
   which is nixllm's domain by the boundary above, not a matter of taste.
 
@@ -144,11 +150,12 @@ refuse.
 ## Checks
 
 `nix flake check` evaluates `modules/nixagent.nix` against `lib.evalModules` and asserts, among
-others: an empty selection resolves to nothing on both lists; every catalogue group has a matching
-option and contributes; `archPackages` and `aurPackages` never intersect on *either* distro
-setting; every selection lands on exactly one list; every catalogue entry still carries
-`nixpkgs = null`; and `claude-code` moves between the lists with `nixagent.distro` and is never on
-both.
+others: an empty selection resolves to nothing on both lists; every catalogue group (`cli` and
+`desktop`) has a matching option and contributes; `archPackages` and `aurPackages` never intersect
+on *either* distro setting; every selection lands on exactly one list; every catalogue entry still
+carries `nixpkgs = null`; `claude-code` moves between the lists with `nixagent.distro` and is never
+on both; and `claude-cowork-linux` — which carries no `archRepoOn` — stays on the AUR list on
+*every* distro setting, since there is no repository lift to apply.
 
 Each of those was confirmed to actually fail when the invariant is broken — a mislabelled `aur`
 flag, an entry naming a nixpkgs attribute, a catalogue group left unwired, and two entries

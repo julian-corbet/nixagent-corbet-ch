@@ -1,28 +1,43 @@
 #
-# The agent catalogue: terminal clients for REMOTE frontier models -- one entry per selectable
-# binary, naming it on each platform this repo is willing to install from.
+# The agent catalogue: clients for REMOTE frontier models -- one entry per selectable package,
+# naming it on each platform this repo is willing to install from. Two shapes today, `cli` (a
+# terminal binary) and `desktop` (an Electron window); THE PLACEMENT RULE below is why both belong
+# in the same file despite the different interface.
 #
 # THE PLACEMENT RULE, stated as a boundary rather than a list, in the same shape nixsh's own
 # lib/tools.nix header states its display rule:
 #
-#   Does the tool drive a model it does not host, from a terminal, with no window of its own?
-#     yes -> it belongs here
+#   Does the tool drive a remote frontier model it does not host, delivered as a package that
+#   self-updates faster than nixpkgs tracks it?
+#     yes -> it belongs here, catalogued as `cli` or `desktop` by whichever interface it actually
+#            has -- that split is about grouping honestly, not about eligibility
 #     no  -> it belongs to whichever repo owns the thing it actually is
+#
+# Whether the tool opens a terminal or a window is NOT the eligibility test, and it is worth being
+# explicit that this file used to apply exactly that clause: `claude-cowork-linux` was checked
+# against it and excluded for failing it, see
+# ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md. The category a person actually
+# maintains is "my AI tooling", and an Electron client sits in it the same way a terminal one does
+# -- both carry the identical delivery problem below (AUR-only, self-updating, must never be
+# pinned by nixpkgs) regardless of which surface renders the reply. The `.desktop`-entry test from
+# that study still correctly separates `cli` from `desktop`; it no longer separates "in this
+# catalogue" from "not".
 #
 # Two neighbours this rule is drawn against, both of which could plausibly have claimed these
 # entries, and neither of which should:
 #
 #   - nixllm SERVES models. Its domain is a broker, an inference engine, a model store, a GPU --
-#     software that loads weights and answers requests. Everything catalogued below is an HTTPS
-#     client that never loads a weight and has no opinion about a GPU. Same project space, opposite
-#     side of the wire, so a shared catalogue would mean one repo whose entries need two unrelated
-#     kinds of host to be useful.
+#     software that loads weights and answers requests. Everything catalogued below, `desktop`
+#     included, is an HTTPS client that never loads a weight and has no opinion about a GPU. Same
+#     project space, opposite side of the wire, so a shared catalogue would mean one repo whose
+#     entries need two unrelated kinds of host to be useful.
 #   - nixsh is universal BY CONSTRUCTION -- every host has a shell and reaches for a terminal tool,
 #     which is exactly why that catalogue has no per-host story to build. These do not have that
 #     property and must not inherit it: a small production server has a shell and wants `ripgrep`,
-#     and emphatically does not want a self-updating agent CLI and its Node runtime. "Runs in a
-#     terminal" is a shape, not a domain; nixsh's claim is the domain "every host needs this", and
-#     these fail it.
+#     and emphatically does not want a self-updating agent client and its Node/Electron runtime --
+#     doubly true for `desktop`, which additionally needs a display the server does not have.
+#     "Runs in a terminal" is a shape, not a domain; nixsh's claim is the domain "every host needs
+#     this", and these fail it regardless of shape.
 #
 # ── THE RULE THIS REPO EXISTS FOR: pacman/AUR ALWAYS, nixpkgs NEVER ────────────────────────────
 #
@@ -97,12 +112,6 @@
 # Named here rather than silently left out, so the boundary is decidable for the next candidate
 # instead of re-argued:
 #
-#   - `claude-cowork-linux` (AUR) -- a DESKTOP application, not a terminal client. It depends on
-#     `electron`, and it is the only candidate examined that installs a `.desktop` entry
-#     (`Type=Application`, `StartupWMClass=Claude`, no `Terminal=true`): its default and only mode
-#     is a window. Excluded by the placement rule at the top of this file, and the `.desktop` file
-#     is the mechanical test -- every entry BELOW ships a `/usr/bin/` binary and nothing else. See
-#     ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md.
 #   - local inference runners of every kind (an engine, a model-serving GUI, a weights converter).
 #     Those load weights, which is nixllm's domain by the boundary above, not a matter of taste.
 { ... }:
@@ -178,6 +187,52 @@
         Official upstream Arch `extra` (verified 2026-08-07). Package name, command name and
         project name all agree, which is worth noting only because three of the four entries here
         do not.
+      '';
+    };
+  };
+
+  # ── Desktop AI clients: an Electron window driving a remote frontier model ────────────────────
+  #
+  # Same delivery problem as `cli` above -- AUR-only, self-updating, must never be pinned by
+  # nixpkgs -- despite drawing a window instead of running in a terminal. Kept as its OWN group
+  # rather than folded into `cli` so that group's documented meaning ("terminal clients driving a
+  # remote frontier model") stays true rather than being quietly stretched to also cover an
+  # Electron app with a `.desktop` entry. See ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md
+  # for the evidence that it genuinely is a window, and this file's own header for why that no
+  # longer excludes it from the catalogue -- only from the `cli` group within it.
+  desktop = {
+    claude-cowork-linux = {
+      arch = "claude-cowork-linux";
+      binary = "claude-cowork";
+      nixpkgs = null;
+
+      # AUR-only, and unlike `claude-code` there is no repository lift: no Arch derivative's own
+      # repository carries this one, so `archRepoOn` is omitted rather than set to `[ ]` -- the
+      # field's own documentation says it appears only on an entry that needs it, and
+      # checks/agents-eval.nix asserts exactly that. Checked three ways on 2026-08-07, the same
+      # three sources this file's header describes:
+      #
+      #   archlinux.org package search      -> 0 results. Upstream Arch does not package it, in
+      #                                         any repository, on any architecture.
+      #   AUR RPC                           -> present, PackageBase `claude-cowork-linux`,
+      #                                         1.1.4010-10, maintainer `johnzfitch`, 3 votes.
+      #   `pacman -Si claude-cowork-linux`  -> "error: package 'claude-cowork-linux' was not
+      #                                         found" on the host this was checked from -- no
+      #                                         derivative repository resolves it, so `aur = true`
+      #                                         is not merely the floor here, it is the whole
+      #                                         answer, with nothing for `archRepoOn` to lift.
+      aur = true;
+
+      note = ''
+        Anthropic's Claude Desktop with Cowork (local agent) support (AUR: johnzfitch/
+        claude-cowork-linux). Package `claude-cowork-linux`, command `claude-cowork` -- the two
+        disagree, same trap `openai-codex` documents above.
+
+        An Electron application: it installs a `.desktop` entry (`Type=Application`,
+        `StartupWMClass=Claude`, no `Terminal=true`), which is why it is a `desktop` selection
+        rather than a `cli` one and not, by itself, a reason to leave it out of this catalogue --
+        see the header. The Cowork feature drives Anthropic's remote model, same as `claude-code`;
+        nothing here loads a weight locally.
       '';
     };
   };

@@ -1,21 +1,24 @@
-# `claude-cowork-linux` is a desktop application, not a terminal client — excluded
+# `claude-cowork-linux` is a desktop application, not a terminal client — catalogued as `desktop`
 
 **Finding.** `claude-cowork-linux` (AUR) is an Electron packaging of Anthropic's Claude **Desktop**
-with local-agent support. It is a window, not a terminal client, and it does not belong in this
-catalogue.
+with local-agent support. It is a window, not a terminal client, and that fact is what separates it
+from every `cli` entry in this catalogue.
 
-**Decided:** not catalogued. Named in `lib/agents.nix`'s "considered and excluded" header rather
-than silently left out, so the boundary is decidable for the next candidate instead of re-argued.
+**Decided:** catalogued, in its own `desktop` group rather than `cli`. Named here so the boundary
+between the two groups — and the reason a window is not a reason to leave a tool out of this repo
+altogether — is decidable for the next candidate instead of re-argued. See `lib/agents.nix`'s own
+header for the placement rule this settles, and `../README.md`'s "Why these are not nixllm's, and
+not nixsh's" section for the two boundaries that still exclude other things.
 
-## Why it was a plausible candidate
+## Why it is a plausible candidate
 
 It is an Anthropic client, it drives a remote frontier model, it self-updates, it is AUR-only, and
-it is named for an agentic feature. Every property this repo exists for is present except the one
-that decides placement.
+it is named for an agentic feature. Every property this repo exists for is present.
 
 ## What was checked
 
-Verified 2026-08-07 against the AUR RPC and the built package's own file list.
+Verified 2026-08-07 against the AUR RPC, the built package's own file list, and (re-verified the
+same day, for the group split) `pacman -Si` and archlinux.org's package search.
 
 **AUR metadata** (`aur.archlinux.org/rpc/v5/info?arg[]=claude-cowork-linux`):
 
@@ -25,10 +28,10 @@ Verified 2026-08-07 against the AUR RPC and the built package's own file list.
 | `Depends` | `electron`, `nodejs` |
 | Upstream | a third-party repackaging repository, not an Anthropic-published one |
 | License | `custom:proprietary` |
+| Maintainer | `johnzfitch`, 3 votes, version `1.1.4010-10` |
 
-**The decisive evidence — the package's own file list.** Every entry catalogued in
-`lib/agents.nix` installs a `/usr/bin/` binary and *nothing else*. This one also installs a
-`.desktop` entry:
+**The package's own file list.** Every `cli` entry in `lib/agents.nix` installs a `/usr/bin/` binary
+and *nothing else*. This one also installs a `.desktop` entry:
 
 ```
 /usr/bin/claude-cowork
@@ -48,29 +51,47 @@ StartupWMClass=Claude
 
 `Type=Application` with a `StartupWMClass` and no `Terminal=true` is a launcher for a window with a
 toplevel surface. That is not a marginal signal — it is the app telling the desktop environment
-what it is.
+what it is. `claude-cowork-linux` genuinely is a desktop application; nothing about that finding is
+in question.
 
-## The rule this settles
+**Repository membership**, the same three sources `lib/agents.nix`'s header requires for every
+entry:
 
-`lib/agents.nix`'s placement rule asks whether a tool drives a model it does not host, from a
-terminal, **with no window of its own**. `claude-cowork-linux` fails the third clause: its default
-and only mode is a window.
+| Source | Result |
+|---|---|
+| `pacman -Si claude-cowork-linux` | `error: package 'claude-cowork-linux' was not found` |
+| archlinux.org package search | 0 results — no upstream Arch repository carries it |
+| AUR RPC | present, `PackageBase claude-cowork-linux`, maintained |
 
-That gives the catalogue a mechanical test rather than a judgement call, and it is worth stating
-because the next candidate will be argued the same way:
+Unlike `claude-code`, no Arch derivative's own repository carries this name — `pacman -Si` returns
+nothing on a CachyOS host either. So `aur = true` is not merely the floor here, as it is for
+`claude-code`: it is the whole answer, and the catalogue entry carries no `archRepoOn`.
 
-> Does the package install a `.desktop` entry? If yes, it is a desktop application and belongs to
-> whichever repo owns desktop applications — not here.
+## What the finding does and does not decide
 
-The test survives the obvious objection. "It contains an agent" is a capability, not a shape; a
-terminal emulator contains a shell and is still a desktop application. This family's sibling repos
-already draw the same line in the opposite direction (a display-default tool belongs to a
-display-substrate repo even when it *can* be coaxed into a terminal), so applying it here keeps one
-rule rather than two.
+The `.desktop` entry is real, mechanical evidence about the tool's *interface* — this is a window,
+not a terminal client, full stop. What it does not settle on its own is *eligibility for this
+catalogue*, and that is the part of the original write-up that did not hold up: interface was being
+used as the placement test, and the placement test has changed.
 
-## What that means in practice
+The category a person actually maintains is "my AI tooling", not "my terminal AI tooling" — an
+Electron client sits in it the same way a CLI does. And the delivery problem that gives this repo
+its reason to exist — AUR-only, self-updating on a cadence nixpkgs cannot track, must never be
+frozen by a store path — is identical for `claude-cowork-linux` and every `cli` sibling around it,
+regardless of which surface renders the reply. Nothing about the window changes any of that.
 
-Nothing about this package becomes undeclarable — it simply belongs to whatever module owns
-GUI/desktop applications on the host, alongside every other Electron app, where it will sit next to
-things that need a session, a compositor and an icon. It does not belong next to four binaries that
-run over SSH on a machine with no display at all.
+So the finding stands and now drives a *different* decision: it is exactly why this entry lives in
+its own `desktop` group rather than being folded into `cli`. Stretching `cli`'s documented meaning
+("terminal clients driving a remote frontier model") to quietly also cover an Electron app would
+make that group's own header a lie the next reader has to discover by inspection. A separate group
+says the true thing once, at the point where it is decided, instead of leaving a name that
+contradicts its own catalogue.
+
+## The mechanical test this leaves behind
+
+> Does the package install a `.desktop` entry? If yes, it is a `desktop` selection. If no, it is a
+> `cli` selection.
+
+That test still does real work — it is exactly how `claude-cowork-linux` was told apart from the
+four `cli` entries above it — it has simply moved from deciding "in this catalogue or not" to
+deciding "which group within it."

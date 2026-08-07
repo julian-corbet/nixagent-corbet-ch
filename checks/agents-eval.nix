@@ -22,12 +22,17 @@ let
   }).config.nixagent;
 
   allClients = lib.attrNames cat.cli;
+  allDesktop = lib.attrNames cat.desktop;
+  allSelectable = lib.length allClients + lib.length allDesktop;
 
   # The whole catalogue, on each of the two distro answers. Both fixtures matter: the arch/AUR
   # split is not a property of the catalogue alone here, it is a property of the catalogue AND the
   # host, so a check that only ever evaluated one of them would leave half the resolution untested.
-  archAll = evalWith { cli = allClients; distro = "arch"; };
-  cachyAll = evalWith { cli = allClients; distro = "cachyos"; };
+  # Both groups selected together -- `cli` and `desktop` share one `selected` list, and a fixture
+  # that only ever populated one group would leave the other's contribution to the shared
+  # archPackages/aurPackages split untested.
+  archAll = evalWith { cli = allClients; desktop = allDesktop; distro = "arch"; };
+  cachyAll = evalWith { cli = allClients; desktop = allDesktop; distro = "cachyos"; };
 
   empty = evalWith { };
 
@@ -53,8 +58,8 @@ let
       lib.intersectLists cachyAll.archPackages cachyAll.aurPackages == [ ];
 
     "every selection lands on exactly one of the two lists -- none silently dropped, none counted twice (both distros)" =
-      lib.length (archAll.archPackages ++ archAll.aurPackages) == lib.length allClients
-      && lib.length (cachyAll.archPackages ++ cachyAll.aurPackages) == lib.length allClients;
+      lib.length (archAll.archPackages ++ archAll.aurPackages) == allSelectable
+      && lib.length (cachyAll.archPackages ++ cachyAll.aurPackages) == allSelectable;
 
     # ── Group wiring ──────────────────────────────────────────────────────────────────────────
     # Hand-listed groups in modules/nixagent.nix are cheap and readable; the failure they invite
@@ -63,15 +68,18 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 4 = 4)" =
-      lib.length archAll.selected == 4
-      && lib.length archAll.selected == lib.length allClients;
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 4, desktop: 1, total: 5)" =
+      lib.length archAll.selected == 5
+      && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
       # `evalModules` is lazy: `tryEval` alone forces only WHNF (the attrset exists), never the
       # type-checked value inside. `deepSeq` forces through, which is what actually runs the
       # listOf-enum merge that rejects the name.
       (builtins.tryEval (builtins.deepSeq (evalWith { cli = [ "lmstudio-bin" ]; }).cli true)).success == false;
+
+    "the \`desktop\` option is typed to its OWN keys too -- a \`cli\` name is refused as a desktop selection" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { desktop = [ "claude-code" ]; }).desktop true)).success == false;
 
     # ── THE REPO'S REASON TO EXIST, MECHANISED ────────────────────────────────────────────────
     # These tools self-update and nixpkgs lags them (measured -- see lib/agents.nix's header), so
@@ -101,9 +109,13 @@ let
       let d = evalWith { cli = [ "claude-code" ]; }; in
       d.aurPackages == [ "claude-code" ] && d.archPackages == [ ];
 
+    "claude-cowork-linux is AUR on EVERY distro -- unlike claude-code, it carries no archRepoOn, so there is no repository lift to apply on any of them" =
+      has archAll.aurPackages "claude-cowork-linux" && !(has archAll.archPackages "claude-cowork-linux")
+      && has cachyAll.aurPackages "claude-cowork-linux" && !(has cachyAll.archPackages "claude-cowork-linux");
+
     "`archRepoOn` is scoped to the entry that needs it -- it does not leak an official-repo claim onto the rest of the catalogue on ANY distro" =
-      sorted cachyAll.aurPackages == [ ]
-      && sorted archAll.aurPackages == [ "claude-code" ];
+      sorted cachyAll.aurPackages == [ "claude-cowork-linux" ]
+      && sorted archAll.aurPackages == [ "claude-code" "claude-cowork-linux" ];
 
     "the three upstream-Arch entries stay on the pacman list regardless of distro -- their repository membership is not derivative-dependent" =
       lib.all (n: has archAll.archPackages n && has cachyAll.archPackages n)
@@ -118,6 +130,7 @@ let
         gemini-cli = "gemini";
         openai-codex = "codex";
         opencode = "opencode";
+        claude-cowork-linux = "claude-cowork";
       };
 
     "the codex package/command divergence is pinned in both directions -- the pacman name is openai-codex, the command is codex, and neither is usable in the other's place" =

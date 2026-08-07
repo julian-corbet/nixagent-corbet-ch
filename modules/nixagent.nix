@@ -50,6 +50,7 @@ let
 
   selected = lib.flatten [
     (map (resolve cat.cli) cfg.cli)
+    (map (resolve cat.desktop) cfg.desktop)
   ];
 
   # An entry is AUR *for this host* unless the host's distro is one whose own repositories carry
@@ -62,6 +63,8 @@ in
 {
   options.nixagent = {
     cli = mkGroup "agentic AI CLIs -- terminal clients driving a remote frontier model (see ../lib/agents.nix's own header for the boundary against nixllm, which serves models, and nixsh, which is universal)" cat.cli;
+
+    desktop = mkGroup "desktop AI clients -- Electron windows driving a remote frontier model, same AUR/self-update delivery problem as \`cli\` above and kept in its own group only so \`cli\`'s own meaning stays literally true (see ../lib/agents.nix's own header)" cat.desktop;
 
     distro = lib.mkOption {
       type = lib.types.enum [ "arch" "cachyos" ];
