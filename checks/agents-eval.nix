@@ -10,9 +10,16 @@
 # repo has no nixpkgs-resolution half to check at all: `nixpkgs = null` everywhere is the policy,
 # and asserting THAT is one of the checks below rather than something a real `pkgs` would help with.
 #
+# SCOPE, now that there are two delivery modes. This file owns the SYSTEM plane
+# (../modules/nixagent.nix: the pacman/AUR split) plus every assertion about the CATALOGUE itself,
+# including the shape of the `upstream` field the second mode reads. How that field resolves into
+# a home-manager activation is ./home-eval.nix, and whether the resulting script actually behaves
+# is ./upstream-install.nix -- which runs it rather than asserting about it.
+#
 # What can NOT be proven here, and is not pretended: whether `claude-code` is in a given
-# repository today. That is a fact about the world, it changes without this repo changing, and it
-# is verified out of band against live sources -- see ../experiments/verify-package-names.sh.
+# repository today, or whether an installer URL still answers. Those are facts about the world,
+# they change without this repo changing, and they are verified out of band against live sources
+# -- see ../experiments/verify-package-names.sh.
 { pkgs, lib ? pkgs.lib }:
 let
   cat = import ../lib/agents.nix { };
@@ -38,6 +45,12 @@ let
 
   has = list: item: lib.elem item list;
   sorted = lib.sort (a: b: a < b);
+
+  # Every entry in the catalogue, group-blind. The `upstream` assertions below are properties of
+  # an ENTRY rather than of a group, and ../modules/home.nix flattens the groups the same way.
+  allEntries = lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat);
+  allKeys = lib.concatMap (g: lib.attrNames cat.${g}) (lib.attrNames cat);
+  withUpstream = lib.filter (t: t.upstream != null) allEntries;
 
   results = {
     # ── The floor: nothing selected must produce nothing at all ────────────────────────────────
@@ -68,8 +81,8 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 4, desktop: 1, total: 5)" =
-      lib.length archAll.selected == 5
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 5, desktop: 1, total: 6)" =
+      lib.length archAll.selected == 6
       && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
@@ -114,8 +127,19 @@ let
       && has cachyAll.aurPackages "claude-cowork-linux" && !(has cachyAll.archPackages "claude-cowork-linux");
 
     "`archRepoOn` is scoped to the entry that needs it -- it does not leak an official-repo claim onto the rest of the catalogue on ANY distro" =
-      sorted cachyAll.aurPackages == [ "claude-cowork-linux" ]
-      && sorted archAll.aurPackages == [ "claude-code" "claude-cowork-linux" ];
+      sorted cachyAll.aurPackages == [ "claude-cowork-linux" "oh-my-pi-bin" ]
+      && sorted archAll.aurPackages == [ "claude-code" "claude-cowork-linux" "oh-my-pi-bin" ];
+
+    # omp is in no upstream Arch repository and in no derivative's repository either (all three of
+    # `oh-my-pi-bin`, `oh-my-pi` and `omp` checked 2026-08-10 -- see its catalogue entry), so it
+    # carries no `archRepoOn` and must stay on the AUR list whatever the host says it runs. Pinned
+    # separately from the claude-cowork-linux case above because they got there for different
+    # reasons and a future `archRepoOn` on either would silently pass the other's assertion.
+    "omp is AUR on EVERY distro, under its PACKAGE name -- the key `omp` is the tool, `oh-my-pi-bin` is the package, and only the latter may reach a package list" =
+      has archAll.aurPackages "oh-my-pi-bin" && has cachyAll.aurPackages "oh-my-pi-bin"
+      && !(has archAll.archPackages "oh-my-pi-bin") && !(has cachyAll.archPackages "oh-my-pi-bin")
+      && !(has (archAll.archPackages ++ archAll.aurPackages) "omp")
+      && !(has (archAll.archPackages ++ archAll.aurPackages) "oh-my-pi");
 
     "the three upstream-Arch entries stay on the pacman list regardless of distro -- their repository membership is not derivative-dependent" =
       lib.all (n: has archAll.archPackages n && has cachyAll.archPackages n)
@@ -130,8 +154,18 @@ let
         gemini-cli = "gemini";
         openai-codex = "codex";
         opencode = "opencode";
+        omp = "omp";
         claude-cowork-linux = "claude-cowork";
       };
+
+    # omp is the sharpest case in the catalogue: catalogue key `omp`, pacman name `oh-my-pi-bin`,
+    # npm name `@oh-my-pi/pi-coding-agent`, command `omp`. It is also the entry that broke the
+    # coincidence that every key equalled its `arch` value -- see lib/agents.nix's own section on
+    # why the key names the TOOL rather than one delivery mode's package.
+    "the omp key/package/command divergence is pinned -- the key is not the package name, and the package name is not the command" =
+      archAll.binaries.omp == "omp"
+      && has archAll.aurPackages "oh-my-pi-bin"
+      && (cat.cli.omp.arch == "oh-my-pi-bin");
 
     "the codex package/command divergence is pinned in both directions -- the pacman name is openai-codex, the command is codex, and neither is usable in the other's place" =
       has archAll.archPackages "openai-codex"
@@ -155,6 +189,60 @@ let
       lib.all (d: lib.elem d [ "arch" "cachyos" ])
         (lib.concatMap (t: t.archRepoOn or [ ])
           (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat)));
+
+    # ── The SECOND delivery mode's catalogue half ─────────────────────────────────────────────
+    # ../modules/home.nix runs `upstream.url` with `upstream.runner` and then probes
+    # `upstream.installs`. Every one of those is a string that reaches a shell or a filesystem
+    # test at activation time on a real machine, so the shape is asserted here where a typo costs
+    # a failed `nix flake check` rather than a failed switch on three hosts.
+
+    "every catalogue entry carries an `upstream` field -- null where the vendor ships no installer, so a blank cannot be mistaken for an unresearched entry" =
+      lib.all (t: t ? upstream) allEntries;
+
+    "every non-null `upstream` names an https URL, an interpreter that exists, an args LIST and an installed path" =
+      lib.all
+        (t:
+          lib.isString t.upstream.url
+          && lib.hasPrefix "https://" t.upstream.url
+          && lib.elem t.upstream.runner [ "bash" "sh" ]
+          && lib.isList t.upstream.args
+          && lib.all lib.isString t.upstream.args
+          && lib.isString t.upstream.installs)
+        withUpstream;
+
+    # `installs` is joined onto $HOME by lib/install-upstream.sh. An absolute path or a `$HOME`
+    # of its own would produce `/home/x//home/x/...` or an unexpanded literal, and the probe would
+    # then never match -- which reads as "reinstalls on every activation", the exact regression
+    # the idempotency gate exists to prevent.
+    "every `upstream.installs` is RELATIVE to $HOME -- no leading slash, no embedded $HOME, no traversal" =
+      lib.all
+        (t:
+          !(lib.hasPrefix "/" t.upstream.installs)
+          && !(lib.hasPrefix "~" t.upstream.installs)
+          && !(lib.hasInfix "$" t.upstream.installs)
+          && !(lib.hasInfix ".." t.upstream.installs))
+        withUpstream;
+
+    # The probe path IS the command. If they diverge, the module verifies one file and puts a
+    # different one on PATH -- and the divergence would only show up as "the tool installed fine
+    # but the command is missing", on a host, after a switch.
+    "every `upstream.installs` ends in the entry's own `binary` -- the idempotency probe and the command on PATH are the same file" =
+      lib.all (t: builtins.baseNameOf t.upstream.installs == t.binary) withUpstream;
+
+    # Not a style rule. modules/home.nix merges `cli` and `desktop` into one selection space, so a
+    # key appearing in both groups would resolve to whichever group merged last, silently.
+    "catalogue keys are unique across ALL groups -- the home-manager plane flattens them into one selection space" =
+      lib.length allKeys == lib.length (lib.unique allKeys);
+
+    # The three entries that carry `upstream = null` each record what was checked (npm-only
+    # distribution, a 404/403 on the plausible installer URL, or a third-party repackaging with no
+    # vendor installer to run). Pinned so that "add an installer URL" stays a deliberate edit with
+    # a measurement behind it rather than something a refactor can invent.
+    "exactly the researched entries carry a vendor installer -- claude-code, opencode and omp; gemini-cli, openai-codex and claude-cowork-linux carry a recorded null" =
+      sorted
+        (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
+          (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))
+      == [ "claude-code" "omp" "opencode" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

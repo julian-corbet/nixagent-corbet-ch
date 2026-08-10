@@ -1,5 +1,5 @@
 {
-  description = "nixagent — agentic AI clients (Claude Code, Claude Cowork, Gemini CLI, Codex, opencode), declared per host and installed from pacman/AUR, never nixpkgs";
+  description = "nixagent — agentic AI clients (Claude Code, Claude Cowork, Gemini CLI, Codex, opencode, omp), declared per host and installed from pacman/AUR or the vendor's own installer, never nixpkgs";
 
   # NO INPUTS FOR CONSUMERS, same reasoning nixmsg and nixdev state for themselves: this flake is
   # options plus a catalogue, taking `pkgs`/`config`/`lib` from whichever evaluation composes it,
@@ -26,10 +26,24 @@
       systemManagerModules.nixagent = ./modules/nixagent.nix;
       systemManagerModules.default = ./modules/nixagent.nix;
 
-      # NO `nixosModules` OUTPUT, DELIBERATELY. Every catalogue entry is `nixpkgs = null` by
-      # policy -- these tools ship their own updater, which a read-only store path cannot run, and
-      # nixpkgs measurably lags every one of them. lib/agents.nix's header carries the numbers.
-      # This absence is the repo's boundary, not an unfinished corner.
+      # Home-manager: the UPSTREAM delivery mode. Runs each selected tool's own vendor installer
+      # into that vendor's own per-user prefix, once, and puts it on PATH -- nix ensures the tool
+      # exists and never owns it. This is how a NixOS host gets these tools, and how ANY host gets
+      # one whose distro package has fallen behind (measured: the AUR carried omp 17.2.2/17.2.3
+      # against an upstream 17.2.12 on 2026-08-10, both flagged out of date). Independent of the
+      # system plane above: a consumer picks per host, and neither is forced.
+      homeManagerModules.nixagent = ./modules/home.nix;
+      homeManagerModules.home = ./modules/home.nix;
+      homeManagerModules.default = ./modules/home.nix;
+
+      # STILL NO `nixosModules` OUTPUT, DELIBERATELY, and the home-manager plane above is not a
+      # step towards one -- it is the reason one is still not needed. Every catalogue entry is
+      # `nixpkgs = null` by policy: these tools ship their own updater, which a read-only store
+      # path cannot run, and nixpkgs measurably lags every one of them (lib/agents.nix's header
+      # carries the numbers). A `nixosModules` output could only mean `environment.systemPackages`
+      # of exactly those frozen derivations. A NixOS host that wants these tools composes
+      # `homeManagerModules.nixagent` instead, which installs the vendor's own build and leaves
+      # its updater working. The absence is the repo's boundary, not an unfinished corner.
 
       # Policy alone, for a consumer that wants the computed lists and will wire them itself, plus
       # the raw catalogue for inspection without re-reading the file. Same split as nixsh's own
@@ -37,11 +51,19 @@
       lib.policy = ./modules/nixagent.nix;
       lib.catalogue = import ./lib/agents.nix { };
 
-      # `nix flake check` does not evaluate `systemManagerModules` on its own, so a green check on
-      # this repo without this file would cover nothing but flake syntax. See the file's own
-      # header for what is under test and what deliberately is not.
+      # `nix flake check` does not evaluate `systemManagerModules` or `homeManagerModules` on its
+      # own, so a green check on this repo without these files would cover nothing but flake
+      # syntax. Each file's own header states what is under test and what deliberately is not.
+      #
+      # `upstream-install` is the odd one out and the important one: it is not an eval-time
+      # assertion but a RUN of lib/install-upstream.sh against a stubbed curl, because a delivery
+      # mode whose idempotency and failure behaviour are only asserted on paper is a delivery mode
+      # nobody can trust. Note that it therefore does real work only under a plain `nix flake
+      # check`; `--no-build` evaluates it and stops.
       checks = forAllSystems (system: {
         agents-eval = import ./checks/agents-eval.nix { pkgs = pkgsFor system; };
+        home-eval = import ./checks/home-eval.nix { pkgs = pkgsFor system; };
+        upstream-install = import ./checks/upstream-install.nix { pkgs = pkgsFor system; };
       });
 
       formatter = forAllSystems (system: (pkgsFor system).nixpkgs-fmt);

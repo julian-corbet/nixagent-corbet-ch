@@ -1,30 +1,41 @@
 # nixagent
 
-**Agentic AI clients — Claude Code, Claude Cowork, Gemini CLI, Codex, opencode — declared per host,
-on the hosts that actually want them, and installed from pacman/AUR rather than nixpkgs because
+**Agentic AI clients — Claude Code, Claude Cowork, Gemini CLI, Codex, opencode, omp — declared per
+host, on the hosts that actually want them, and delivered by whichever of two mechanisms keeps the
+tool current: the distro's package manager, or the vendor's own installer. Never nixpkgs, because
 they update themselves.**
 
 ## What this is
 
-A platform-neutral catalogue (`lib/agents.nix`) naming each agent client's package identity and its
-real command name, plus one module (`modules/nixagent.nix`) that resolves a selection into two
-lists a host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries) and
-`desktop` (Electron windows) — both share the same delivery problem below, only the interface
-differs.
+A platform-neutral catalogue (`lib/agents.nix`) naming each agent client's package identity, its
+real command name and its vendor installer, plus **two modules for two delivery planes**:
+
+**The distro plane** (`modules/nixagent.nix`, system-manager) resolves a selection into two lists a
+host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries) and `desktop`
+(Electron windows).
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
-nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" ];
+nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" "omp" ];
 nixagent.desktop = [ "claude-cowork-linux" ];
 
 nixarch.packages.pacman = config.nixagent.archPackages;
 nixarch.packages.aur    = config.nixagent.aurPackages;
 ```
 
-That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
-family.
+**The upstream plane** (`modules/home.nix`, home-manager) runs the tool's *own* installer into the
+vendor's *own* per-user prefix, once, and puts it on PATH. This is how a NixOS host gets these
+tools at all, and how any host gets one whose distro package has fallen behind.
 
-## The rule this repo exists for: pacman/AUR always, nixpkgs never
+```nix
+nixagent.home.upstream = [ "claude-code" "omp" ];   # claude-code | omp | opencode
+```
+
+That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
+family. The planes are independent and chosen **per host** — pacman/AUR on the Arch boxes, upstream
+on NixOS, or upstream everywhere. Neither is forced and neither is the fallback.
+
+## The rule this repo exists for: never nixpkgs
 
 These tools **ship their own updater** and release on a cadence measured in days. A nix-store path
 is read-only, so the updater cannot run at all — the version freezes until a human bumps a
@@ -46,10 +57,76 @@ So availability is not the reason — nixpkgs carries all four. The reason is th
 derivation pins and hashes a release, which is precisely the property this class of tool is built
 to defeat.
 
+(`omp`, added later, is the one entry nixpkgs genuinely does *not* carry — neither `omp` nor
+`oh-my-pi` exists there, force-evaluated 2026-08-10. What does exist is `pkgs.pi-coding-agent`
+0.83.0, homepage `pi.dev`, main program `pi`: Mario Zechner's pi-mono, the project omp forked
+*from*. Reaching for it because the npm name is `@oh-my-pi/pi-coding-agent` installs a different
+agent under a different command.)
+
 The catalogue therefore carries **`nixpkgs = null` on every entry**, present rather than omitted so
 that nobody mistakes the policy for an oversight, and `checks/agents-eval.nix` asserts it — an
 addition that names a real nixpkgs attribute fails `nix flake check`. There is **no `nixosModules`
-output**: not a gap to fill later, but the boundary the repo was drawn for.
+output**: not a gap to fill later, but the boundary the repo was drawn for. A NixOS host that wants
+these tools uses the upstream plane below, which installs the vendor's own build and leaves its
+updater working.
+
+## The second delivery mode, and the measurement that forced it
+
+The argument above is about nixpkgs and it holds. What it does *not* establish is that a distro
+package is always current — and for a fast-moving tool it measurably is not. Checked 2026-08-10
+against the AUR RPC and each project's own release feed:
+
+| Tool | Upstream | Distro package |
+|---|---|---|
+| `omp` | **17.2.12** (2026-08-09) | AUR `oh-my-pi-bin` 17.2.2-1, **flagged out of date 8 Aug**<br>AUR `oh-my-pi` 17.2.3-1, **flagged out of date 4 Aug** |
+| `claude-code` | 2.1.226 | AUR 2.1.220-1, **flagged out of date 4 Aug**; `cachyos` repo 2.1.222-1 |
+| `opencode` | 1.18.16 (2026-08-10) | Arch `extra` 1.18.15-1 |
+| `gemini-cli` | 0.54.4 | Arch `extra` 1:0.50.0-1 |
+
+Ten patch releases behind, with an `omp-updater` bot listed as co-maintainer on *both* AUR
+packages. A packager — even an automated one — is a human in the loop of a project that ships
+several times a week, and for a fast enough project the AUR pins as badly as nixpkgs would.
+
+So there is a second plane, and its contract is one sentence:
+
+> **Nix ensures the tool exists and is on PATH. Nix never owns it.**
+
+No `home.packages`, no `home.file` for a binary, no hash and no version anywhere — `checks/
+home-eval.nix` asserts that absence, because the absence *is* the design. Afterwards `claude
+update`, `omp`'s self-update and the rest keep working, which is the whole point.
+
+The two modes answer different questions, and neither wins globally:
+
+| | distro plane | upstream plane |
+|---|---|---|
+| Updates via | `pacman -Syu`, with the host's other packages | the tool's own updater |
+| Freshness bounded by | a packager | the vendor's own release |
+| Needs | a package manager and (for AUR) a helper | `curl` and a `$HOME` |
+| Works on NixOS | no | yes |
+| Removes cleanly | **yes** — pacman owns the files | **no** — nothing owns the files |
+
+That last row is the honest cost: deselecting a tool on the upstream plane leaves the binary
+exactly where it was. Full write-up:
+[`studies/the-aur-lags-upstream-too.md`](studies/the-aur-lags-upstream-too.md).
+
+### How idempotency and failure work
+
+One `test -x` on the vendor's own launcher path, per selected tool, per activation. Present →
+nothing is fetched, nothing is printed, no subprocess runs. That is the entire cost on a machine
+that already has the tool, and it also protects the tool's self-updates: re-running a vendor
+installer over a self-updated install is how a current tool gets rolled *back*.
+
+When the tool is absent, the installer is downloaded **to a file** and only then run — never
+`curl | sh`, because a pipeline's exit status is its last command's, so a failed fetch is handed to
+a shell that reads nothing and exits 0. A zero exit from the installer is then not treated as
+evidence of anything: the expected path must exist, be executable, and answer `--version` before
+the activation is allowed to succeed. Each stage failure prints a labelled block naming the stage,
+the installer's own output and the fact that the command is unavailable, and by default fails the
+switch (`nixagent.home.onInstallFailure = "warn"` downgrades it for a laptop that switches
+offline — quieter, never silent).
+
+Full reasoning, including what each vendor installer actually does:
+[`studies/upstream-installers-disagree-about-everything.md`](studies/upstream-installers-disagree-about-everything.md).
 
 ## Why these are not nixllm's, and not nixsh's
 
@@ -105,24 +182,45 @@ The two errors are not symmetric, so the design follows the asymmetry:
 Write-up with the full evidence:
 [`studies/claude-code-is-not-in-arch-official-repos.md`](studies/claude-code-is-not-in-arch-official-repos.md).
 
-## Package name ≠ command name
+## Package name ≠ command name ≠ catalogue key
 
-Four of the five disagree, so `nixagent.binaries` publishes the mapping. Pointing an alias, a
+Four of the six disagree, so `nixagent.binaries` publishes the mapping. Pointing an alias, a
 wrapper or a home-manager config at the *package* name gets you a command that does not exist.
 
-| Selection | pacman package | command |
-|---|---|---|
-| `claude-code` | `claude-code` | `claude` |
-| `gemini-cli` | `gemini-cli` | `gemini` |
-| `openai-codex` | `openai-codex` | `codex` |
-| `opencode` | `opencode` | `opencode` |
-| `claude-cowork-linux` | `claude-cowork-linux` | `claude-cowork` |
+| Selection (catalogue key) | pacman package | command | vendor installer |
+|---|---|---|---|
+| `claude-code` | `claude-code` | `claude` | `claude.ai/install.sh` → `~/.local/bin/claude` |
+| `gemini-cli` | `gemini-cli` | `gemini` | — (npm/brew only; the two plausible URLs 404) |
+| `openai-codex` | `openai-codex` | `codex` | — (npm/brew only; `openai.com/codex/install.sh` 403) |
+| `opencode` | `opencode` | `opencode` | `opencode.ai/install` → `~/.opencode/bin/opencode` |
+| `omp` | `oh-my-pi-bin` | `omp` | `omp.sh/install` → `~/.local/bin/omp` |
+| `claude-cowork-linux` | `claude-cowork-linux` | `claude-cowork` | — (third-party repackaging) |
+
+`omp` is the sharpest case and the reason the key is documented as naming the **tool**: the project
+calls itself `omp`, the AUR calls it `oh-my-pi-bin`, npm calls it `@oh-my-pi/pi-coding-agent`, and
+the command is `omp`. Four names, no two the same. The key cannot be "the pacman name" now that it
+is also what a consumer writes on the home-manager plane, where the AUR does not exist and a `-bin`
+suffix means nothing.
+
+`upstream = null` is a **recorded finding**, not a blank — each such entry carries what was checked
+and why npm was not accepted as a substitute. `nixagent.home.upstream` is typed to the entries that
+have an installer, so naming one that does not is an eval error rather than an activation that
+quietly fetches nothing.
 
 ## What this does not own
 
 - **Configuration of the agents themselves** — API keys, model choice, MCP servers, permission
-  rules. This repo installs binaries and publishes names; per-user agent config is home-manager's
-  job, and lives wherever the consumer already keeps it.
+  rules. This repo delivers binaries and publishes names. That it now *has* a home-manager module
+  does not change this: `modules/home.nix` exists because an installer needs a user and a `$HOME`,
+  not because agent configuration moved in. Per-user agent config lives wherever the consumer
+  already keeps it, and `nixagent.home.binaries`/`paths` are published so it can point at the real
+  command instead of guessing it from a package name.
+- **Updating anything.** On the distro plane that is `pacman -Syu`'s job; on the upstream plane it
+  is the tool's own updater's, and preserving that is the reason the plane exists. Nothing here
+  re-runs an installer over a tool that is already present.
+- **Removing anything from the upstream plane.** Nothing owns those files, so deselecting a tool
+  leaves the binary in place. Stated plainly rather than papered over — the distro plane does not
+  have this limitation, and that is a real reason to prefer it on a host that has a reconciler.
 - **Local inference of any kind** — engines, model runners, weight converters. Those load weights,
   which is nixllm's domain by the boundary above, not a matter of taste.
 
@@ -130,36 +228,70 @@ wrapper or a home-manager config at the *package* name gets you a command that d
 
 | Path | Purpose |
 |---|---|
-| `flake.nix` | Flake entry point: `systemManagerModules`, `lib.catalogue`, `lib.policy`, `checks`. No `nixosModules` — see above. |
-| `lib/agents.nix` | The catalogue: one entry per agent CLI, with its pacman name, command, AUR status and the policy `nixpkgs = null`. |
-| `modules/nixagent.nix` | Options, catalogue resolution, and the published `archPackages`/`aurPackages`/`binaries`. Also *is* the Arch backend — there is nothing platform-specific left for a second file to hold. |
-| `checks/agents-eval.nix` | `nix flake check`: evaluates the module for real via `lib.evalModules` and asserts what it resolves. |
-| `experiments/verify-package-names.sh` | Hand-run verification of every name against upstream Arch, the AUR, and the local pacman. |
+| `flake.nix` | Flake entry point: `systemManagerModules`, `homeManagerModules`, `lib.catalogue`, `lib.policy`, `checks`. No `nixosModules` — see above. |
+| `lib/agents.nix` | The catalogue: one entry per agent client, with its pacman name, command, AUR status, vendor installer, and the policy `nixpkgs = null`. |
+| `lib/install-upstream.sh` | The upstream plane's shell half: one sourceable function that probes, fetches, runs and **verifies** a vendor installer. Inlined into the activation script by `modules/home.nix` and executed for real by `checks/upstream-install.nix` — one implementation, not a copy. |
+| `modules/nixagent.nix` | Distro plane: options, catalogue resolution, and the published `archPackages`/`aurPackages`/`binaries`. Also *is* the Arch backend — there is nothing platform-specific left for a second file to hold. |
+| `modules/home.nix` | Upstream plane: `nixagent.home.*`, one activation entry, `home.sessionPath`, and the published `binaries`/`paths`/`prefixes`. |
+| `checks/agents-eval.nix` | The distro plane and the catalogue's own shape, via `lib.evalModules`. |
+| `checks/home-eval.nix` | The upstream plane's rendering, via `lib.evalModules` against a stub of the home-manager options it writes to. |
+| `checks/upstream-install.nix` + `.sh` | The only check that **runs** something: `lib/install-upstream.sh` shellchecked, then executed against a stubbed `curl` through eleven cases. |
+| `experiments/verify-package-names.sh` | Hand-run verification of every name against upstream Arch, the AUR (with out-of-date flags) and the local pacman, plus a live fetch of every vendor installer URL. |
 | `studies/` | Written-up findings that changed a decision here. |
 
 ## Platform support
 
-**Arch / CachyOS (via system-manager):** the target. Publishes package-name lists for the host's
-own reconciler; installs nothing itself, because on Arch there is no installer here to call.
+**Arch / CachyOS (via system-manager):** the distro plane's target. Publishes package-name lists
+for the host's own reconciler; installs nothing itself, because on Arch there is no installer here
+to call.
 
-**NixOS:** deliberately unsupported — see the nixpkgs rule above. A NixOS host that composes this
-module gets options it can set and lists nothing reads, which is the honest outcome rather than an
-`environment.systemPackages` path that would silently install the frozen copy this repo exists to
-refuse.
+**Any host with home-manager, NixOS included (via home-manager):** the upstream plane. Installs the
+vendor's own build into the vendor's own per-user prefix and puts it on PATH. This is the *only*
+way these tools arrive on a NixOS host from this repo — `nixosModules` remains deliberately absent,
+because it could only mean `environment.systemPackages` of the frozen derivations the nixpkgs rule
+refuses.
+
+Both planes can run on the same host for different tools. They share no state — system-manager and
+home-manager are separate evaluations with no common `config` — so the one case where they collide
+(the same command arriving from both) is reported at activation time, where both are finally
+visible, rather than pretended away at eval time.
 
 ## Checks
 
-`nix flake check` evaluates `modules/nixagent.nix` against `lib.evalModules` and asserts, among
-others: an empty selection resolves to nothing on both lists; every catalogue group (`cli` and
-`desktop`) has a matching option and contributes; `archPackages` and `aurPackages` never intersect
-on *either* distro setting; every selection lands on exactly one list; every catalogue entry still
-carries `nixpkgs = null`; `claude-code` moves between the lists with `nixagent.distro` and is never
-on both; and `claude-cowork-linux` — which carries no `archRepoOn` — stays on the AUR list on
-*every* distro setting, since there is no repository lift to apply.
+Three, all wired to `nix flake check`.
 
-Each of those was confirmed to actually fail when the invariant is broken — a mislabelled `aur`
-flag, an entry naming a nixpkgs attribute, a catalogue group left unwired, and two entries
-resolving to the same pacman name each trip their own assertion and nothing else.
+**`agents-eval`** evaluates `modules/nixagent.nix` via `lib.evalModules` and asserts, among others:
+an empty selection resolves to nothing on both lists; every catalogue group (`cli` and `desktop`)
+has a matching option and contributes; `archPackages` and `aurPackages` never intersect on *either*
+distro setting; every selection lands on exactly one list; every entry still carries
+`nixpkgs = null`; every entry carries an `upstream` field whose `installs` is relative to `$HOME`
+and ends in that entry's own `binary`; catalogue keys are unique across groups; `claude-code` moves
+between the lists with `nixagent.distro` and is never on both; and `claude-cowork-linux` and `omp`
+— which carry no `archRepoOn` — stay on the AUR list on *every* distro setting.
+
+**`home-eval`** evaluates `modules/home.nix` against a stub of the home-manager options it writes
+to, and asserts what it renders: one activation entry rather than one per tool, after
+`writeBoundary`; every call prefixed with home-manager's dry-run hook, so `home-manager build` can
+never install anything; the probe path and command taken from the catalogue rather than the key or
+the package name; `--binary` and `--no-modify-path` present where they are load-bearing; each
+vendor's own prefix on `home.sessionPath`, deduplicated; a selection with no vendor installer
+refused at eval time; and — mechanising the contract — **no `home.packages`, no `home.file`, no
+version, hash or store path anywhere in the rendered script**.
+
+**`upstream-install`** shellchecks `lib/install-upstream.sh` and then *runs* it against a stubbed
+`curl` through eleven cases, including: it installs when the tool is absent; on a second activation
+it invokes curl **zero** times *with the network stubbed to fail*, so even an attempt would be
+fatal; a 404 and an HTML error page and a non-zero installer each produce a labelled diagnostic
+carrying the installer's own output; an installer that exits 0 having installed nothing **fails**;
+a binary that installs but cannot start fails; `warn` mode does not abort but still prints; and a
+malformed call is never downgraded by `warn`.
+
+Every assertion in all three was confirmed to actually fail when the thing it guards is broken.
+For the behaviour suite that was done by mutation: removing the idempotency gate, the
+installed-path check, the not-a-script check, the `--version` smoke test, curl's status capture,
+and warn mode's early return each trip their own cases and nothing else. On the eval side, dropping
+`--binary` from the catalogue, making an `installs` path absolute, adding a `home.packages` entry,
+and removing the dry-run hook each trip exactly one named assertion.
 
 ## Related projects
 

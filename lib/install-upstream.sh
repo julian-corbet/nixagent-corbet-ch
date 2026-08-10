@@ -1,0 +1,290 @@
+# shellcheck shell=bash
+#
+# nixagent -- the UPSTREAM delivery mode, shell half. Defines one function and nothing else, so
+# this file is `source`-able: ../modules/home.nix inlines it verbatim into a single home-manager
+# activation entry and then calls the function once per selected tool, and ../checks/
+# upstream-install.nix sources the SAME file and drives the function directly against a stubbed
+# curl. One implementation, exercised by the tests that guard it -- not a copy of it.
+#
+# ── THE CONTRACT: NIX ENSURES THE TOOL EXISTS, NIX NEVER OWNS IT ───────────────────────────────
+#
+# Everything below runs the VENDOR's own installer into the VENDOR's own per-user prefix, and then
+# gets out of the way. Nothing here writes a version number, a hash, a lock file or a store path,
+# and nothing here ever runs a second time on a machine that already has the tool. That is
+# deliberate and it is the whole point: these tools ship their own updater, `<tool> update` must
+# keep working afterwards, and a nix-managed copy -- read-only store path or not -- takes that
+# away. See ../lib/agents.nix's header for the measurements behind the policy, including the ones
+# showing the AUR lagging as badly as nixpkgs for a fast-moving entry.
+#
+# So the post-condition this function enforces is "the command EXISTS and runs", never "the
+# command is version X". An operator who wants a specific version runs the tool's own updater.
+#
+# ── WHY NOT `curl ... | sh` ────────────────────────────────────────────────────────────────────
+#
+# Every one of these vendors documents `curl -fsSL <url> | sh`. Do not do that from an activation
+# script. A pipeline's exit status is its LAST command's, so a failed fetch -- DNS, a captive
+# portal, a 404, a proxy returning an error page -- is handed to `sh`, which reads it, finds
+# nothing to run, and exits 0. The switch then reports success having installed nothing, which is
+# exactly the class of failure these hosts have been bitten by often enough to build a rule around.
+# `set -o pipefail` would fix the status but not the "200 OK, here is an HTML error page" case.
+#
+# Downloading to a file first makes curl's own exit status the answer, and lets the content be
+# looked at before it is executed. Both checks are below, and both have a test.
+#
+# ── THE THREE THINGS THAT ARE VERIFIED AFTER THE INSTALLER RETURNS ─────────────────────────────
+#
+# An installer exiting 0 is not evidence that anything was installed; it is evidence that nothing
+# crashed. So a zero exit is followed by: the expected path exists, it is executable, and it
+# answers `--version`. The last one is not paranoia -- omp's own installer does exactly this to
+# itself (scripts/install.sh, the SMOKE_OUTPUT block: a musl build downloads fine and then dies
+# with relocation errors, so the download succeeding proves nothing). Every catalogued installer's
+# binary answers `--version`; a future tool that does not would need a catalogue field for its
+# equivalent, and until one exists inventing the field would be speculative surface.
+#
+# ── REQUIRES bash ──────────────────────────────────────────────────────────────────────────────
+#
+# Arrays and `local`. Home-manager's activation script is bash, and the check runs it under bash.
+# The INSTALLERS are run with whichever interpreter their own shebang and docs specify, which is
+# not always bash -- that is the `--runner` argument, per catalogue entry.
+
+# nixagent_install_upstream
+#   --name NAME              catalogue key, for messages only
+#   --command CMD            the command the tool installs (`claude`, not `claude-code`)
+#   --probe REL              installed launcher, RELATIVE TO $HOME -- see the note below
+#   --url URL                the vendor's installer
+#   --runner bash|sh         interpreter to run it with
+#   [--on-failure abort|warn]  default abort
+#   [--connect-timeout N]      default 10  (seconds)
+#   [--max-time N]             default 600 (seconds)
+#   [-- ARGS...]             flags passed to the installer, from the catalogue entry
+#
+# `--probe` is relative to $HOME, resolved here at ACTIVATION time, rather than an absolute path
+# baked in at eval time. Two reasons, one practical and one structural: the check can point a fake
+# HOME at a scratch directory and exercise the real function, and a home-manager evaluation that
+# is built on one machine and activated as a different user cannot bake the wrong home in.
+#
+# Exit status: 0 on success or a skip, 1 on a failed install under `--on-failure abort`, 2 on a
+# malformed call. 2 is never downgraded by `--on-failure warn`: a bad argument list is a bug in
+# this repo, not a network condition, and hiding it behind a warning would hide the bug.
+nixagent_install_upstream() {
+  local name="" command_name="" probe_rel="" url="" runner=""
+  local on_failure="abort" connect_timeout="10" max_time="600"
+  local -a installer_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --)
+        shift
+        installer_args=("$@")
+        break
+        ;;
+      --name | --command | --probe | --url | --runner | --on-failure | --connect-timeout | --max-time)
+        if [ "$#" -lt 2 ]; then
+          printf 'nixagent: internal error: %s requires a value\n' "$1" >&2
+          return 2
+        fi
+        case "$1" in
+          --name) name="$2" ;;
+          --command) command_name="$2" ;;
+          --probe) probe_rel="$2" ;;
+          --url) url="$2" ;;
+          --runner) runner="$2" ;;
+          --on-failure) on_failure="$2" ;;
+          --connect-timeout) connect_timeout="$2" ;;
+          --max-time) max_time="$2" ;;
+        esac
+        shift 2
+        ;;
+      *)
+        printf 'nixagent: internal error: unknown argument %s\n' "$1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  local missing=""
+  [ -n "$name" ] || missing="$missing --name"
+  [ -n "$command_name" ] || missing="$missing --command"
+  [ -n "$probe_rel" ] || missing="$missing --probe"
+  [ -n "$url" ] || missing="$missing --url"
+  [ -n "$runner" ] || missing="$missing --runner"
+  if [ -n "$missing" ]; then
+    printf 'nixagent: internal error: missing required argument(s):%s\n' "$missing" >&2
+    return 2
+  fi
+
+  case "$on_failure" in
+    abort | warn) ;;
+    *)
+      printf 'nixagent: internal error: --on-failure must be abort or warn, got %s\n' "$on_failure" >&2
+      return 2
+      ;;
+  esac
+
+  if [ -z "${HOME:-}" ]; then
+    printf 'nixagent: %s: internal error: HOME is unset, so the per-user prefix cannot be resolved\n' "$name" >&2
+    return 2
+  fi
+
+  local probe="$HOME/$probe_rel"
+
+  # ── THE IDEMPOTENCY GATE ────────────────────────────────────────────────────────────────────
+  #
+  # One `test -x` per selected tool per activation, and on a machine that already has the tool
+  # that is the ENTIRE cost of this module: no network, no subprocess, no output. An activation
+  # step that fetches on every switch would be a regression rather than a feature, and it would
+  # also fight the tool's own updater -- re-running a vendor installer over a self-updated install
+  # is how a working tool gets rolled back to whatever the installer's "latest" thinks today.
+  #
+  # `-x` and not `-e`: it follows symlinks, so the dangling-symlink case (a version directory
+  # pruned out from under `~/.local/bin/claude`) reads as absent and gets repaired, which is the
+  # behaviour wanted. It is also deliberately NOT `command -v`: resolving the name anywhere on
+  # PATH would let a distro-packaged copy from the pacman/AUR plane satisfy the probe, and those
+  # two planes are chosen per host precisely so they do not have to agree.
+  if [ -x "$probe" ]; then
+    return 0
+  fi
+
+  printf 'nixagent: %s: %s is absent -- installing from %s\n' "$name" "$probe" "$url"
+
+  # The one place the two delivery planes can collide, reported rather than resolved. Nix cannot
+  # see it at eval time -- the pacman/AUR plane is a system-manager evaluation and this is a
+  # home-manager one, two separate option trees with no shared `config` to read across -- so it is
+  # caught here, at the only moment both are visible. Not fatal: a per-user install shadowing a
+  # distro one is a legitimate thing to want, and it is what a $HOME-first PATH will do.
+  local shadowed=""
+  shadowed="$(command -v "$command_name" 2>/dev/null)" || shadowed=""
+  if [ -n "$shadowed" ]; then
+    # Single quotes around the command name, not backticks: this is a single-quoted printf format
+    # and shellcheck reads a backtick in one as an unexpanded command substitution (SC2016). The
+    # check in ../checks/upstream-install.nix runs shellcheck over this file precisely because it
+    # is inlined into a real activation script, so the warning is fixed rather than suppressed.
+    printf "nixagent: %s: NOTE -- '%s' already resolves to %s (another delivery plane, probably a distro package). The upstream install will shadow it wherever %s comes first on PATH.\n" \
+      "$name" "$command_name" "$shadowed" "$(dirname "$probe")" >&2
+  fi
+
+  local stage="" detail="" rc=0
+  local tmpdir="" log=""
+
+  # Single-exit block: every failure sets `stage`/`detail` and breaks to the one reporting site
+  # below, so there is exactly one place that formats a diagnostic and exactly one place that
+  # decides abort-vs-warn. `cmd || rc=$?` throughout rather than `if ! cmd`, for two reasons: the
+  # `||` puts the command in a tested context so an enclosing `set -e` (home-manager's activation
+  # script has one) cannot abort before the diagnostic is built, and `$?` after a bare `if ! cmd`
+  # is the status of the NEGATION, i.e. 0, which would report every failure as "exited 0".
+  while :; do
+    if ! command -v curl >/dev/null 2>&1; then
+      stage="preflight"
+      detail="curl is not on PATH, and every catalogued installer needs it (they fetch their own payloads with it too)"
+      break
+    fi
+
+    tmpdir="$(mktemp -d)" || tmpdir=""
+    if [ -z "$tmpdir" ] || [ ! -d "$tmpdir" ]; then
+      stage="preflight"
+      detail="could not create a temporary directory"
+      break
+    fi
+    log="$tmpdir/output"
+    : >"$log"
+
+    # Fetch to a FILE. See this file's header for why not `curl | sh`.
+    rc=0
+    curl -fsSL --connect-timeout "$connect_timeout" --max-time "$max_time" \
+      -o "$tmpdir/installer" "$url" 2>"$log" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="download"
+      detail="curl exited $rc fetching the installer (22 = HTTP error such as 404, 28 = timed out after ${max_time}s, 6/7 = DNS or connection refused)"
+      break
+    fi
+
+    if [ ! -s "$tmpdir/installer" ]; then
+      stage="download"
+      detail="the installer downloaded as an empty file"
+      break
+    fi
+
+    # A 200 response is not proof of a script. Captive portals, proxies and CDN error pages all
+    # answer 200 with HTML, which `curl -f` cannot reject and `sh` would happily "run".
+    local firstline=""
+    IFS= read -r firstline <"$tmpdir/installer" || firstline=""
+    case "$firstline" in
+      '#!'*) ;;
+      *)
+        stage="download"
+        detail="what came back does not start with a #! line, so it is not a shell script"
+        # The head of the response goes into the diagnostic, because the useful part of an error
+        # page is rarely its first line -- `<!DOCTYPE html>` says nothing, the `<title>502 Bad
+        # Gateway</title>` two lines down says everything. Bounded, so a large binary body cannot
+        # flood the switch output.
+        head -n 5 "$tmpdir/installer" >>"$log" 2>/dev/null || true
+        break
+        ;;
+    esac
+
+    # `${arr[@]+...}` so an empty argument array is not an unbound-variable error under `set -u`.
+    rc=0
+    "$runner" "$tmpdir/installer" ${installer_args[@]+"${installer_args[@]}"} >"$log" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="install"
+      detail="the installer exited $rc"
+      break
+    fi
+
+    # ── EXIT 0 IS NOT EVIDENCE OF AN INSTALL ──────────────────────────────────────────────────
+    if [ ! -e "$probe" ]; then
+      stage="verify"
+      detail="the installer exited 0 but $probe does not exist -- it reported success having installed nothing, or it installed somewhere else than lib/agents.nix records"
+      break
+    fi
+    if [ ! -x "$probe" ]; then
+      stage="verify"
+      detail="$probe exists but is not executable"
+      break
+    fi
+
+    rc=0
+    "$probe" --version >"$tmpdir/version" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="verify"
+      detail="$probe was installed but '$command_name --version' exited $rc, so the binary cannot start"
+      cat "$tmpdir/version" >>"$log" 2>/dev/null || true
+      break
+    fi
+
+    local version_line=""
+    IFS= read -r version_line <"$tmpdir/version" || version_line="(no output)"
+    printf 'nixagent: %s: installed and verified %s -- %s\n' "$name" "$probe" "$version_line"
+    break
+  done
+
+  if [ -n "$stage" ]; then
+    local severity="FAILED"
+    if [ "$on_failure" = "warn" ]; then
+      severity="WARNING (nixagent.home.onInstallFailure = \"warn\")"
+    fi
+    {
+      printf '\n'
+      printf 'nixagent: %s: %s -- upstream install did not complete\n' "$name" "$severity"
+      printf '    stage:     %s\n' "$stage"
+      printf '    detail:    %s\n' "$detail"
+      printf '    installer: %s (run with %s)\n' "$url" "$runner"
+      printf '    expected:  %s\n' "$probe"
+      if [ -n "$log" ] && [ -s "$log" ]; then
+        printf '    ---- installer output ----\n'
+        sed 's/^/    /' "$log"
+        printf '    --------------------------\n'
+      fi
+      printf "    the '%s' command is NOT available for this user.\n" "$command_name"
+      printf '\n'
+    } >&2
+    if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
+    if [ "$on_failure" = "warn" ]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
+  return 0
+}

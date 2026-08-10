@@ -24,6 +24,18 @@
 # see lib/agents.nix's header). That policy is enforced at eval time by checks/agents-eval.nix, so
 # it is not re-checked here.
 #
+# THE SECOND DELIVERY MODE IS CHECKED HERE TOO, and it needs this file more than the first one
+# does. `upstream.url` in lib/agents.nix is a vendor-controlled URL that can 404, move, or start
+# answering with an HTML error page, and none of that changes anything in this repo. checks/ cannot
+# see it (a pure evaluation has no network) and checks/upstream-install.nix deliberately stubs curl
+# so it tests behaviour rather than the internet. So the live question -- does each installer still
+# answer, and is what comes back still a shell script -- is asked here, by hand.
+#
+# The AUR pass also reports each package's VERSION and out-of-date flag rather than just its
+# existence. That is not decoration: an AUR name that exists but is ten releases behind is the
+# whole finding behind studies/the-aur-lags-upstream-too.md, and a run of this script is where an
+# operator would notice it happening again.
+#
 # NAMES ARE READ OUT OF lib/agents.nix, never hand-maintained in this file -- a duplicated list
 # goes stale in both directions, silently skipping entries that were added and still "verifying"
 # entries that were removed.
@@ -48,6 +60,23 @@ catalogue_names() {
 read -r -a official_names <<<"$(catalogue_names '!(t.aur or false)')"
 read -r -a aur_names <<<"$(catalogue_names '(t.aur or false)')"
 
+# The upstream plane's half of the catalogue, as `key|url|runner` triples. Same pure-builtins
+# reading as above, and the same reason: a hand-kept second list would go stale in both directions.
+catalogue_upstreams() {
+  nix-instantiate --eval --strict --expr '
+    let
+      cat = import ./lib/agents.nix { };
+      groups = builtins.attrValues cat;
+      pairs = builtins.concatLists (map (g:
+        map (k: { name = k; entry = g.${k}; }) (builtins.attrNames g)) groups);
+      want = builtins.filter (p: p.entry.upstream != null) pairs;
+    in builtins.concatStringsSep " "
+      (map (p: "${p.name}|${p.entry.upstream.url}|${p.entry.upstream.runner}") want)
+  ' | sed 's/^"//; s/"$//'
+}
+
+read -r -a upstreams <<<"$(catalogue_upstreams)"
+
 status=0
 
 echo "== Upstream Arch official repos (archlinux.org package search) -- ${#official_names[@]} name(s) =="
@@ -70,19 +99,70 @@ echo
 echo "== The AUR (aur.archlinux.org RPC v5) -- ${#aur_names[@]} name(s) =="
 echo "   These carry aur = true, the safe floor; a derivative may still serve them from its own repo."
 for pkg in "${aur_names[@]}"; do
-  if curl -sf "https://aur.archlinux.org/rpc/v5/info?arg[]=$pkg" | grep -q '"resultcount":1'; then
-    echo "OK   $pkg (AUR)"
-  else
-    echo "FAIL $pkg -- not in the AUR either. The name in lib/agents.nix is wrong."
+  info="$(curl -sf "https://aur.archlinux.org/rpc/v5/info?arg[]=$pkg" \
+    | python3 -c 'import json,sys,datetime
+d = json.load(sys.stdin)
+if d["resultcount"] != 1:
+    print("MISSING"); raise SystemExit
+r = d["results"][0]
+flag = r.get("OutOfDate")
+when = datetime.datetime.fromtimestamp(flag, datetime.UTC).date().isoformat() if flag else ""
+print(r["Version"], ("FLAGGED-OUT-OF-DATE-" + when) if flag else "current")' 2>/dev/null || echo MISSING)"
+  case "$info" in
+    MISSING | "")
+      echo "FAIL $pkg -- not in the AUR either. The name in lib/agents.nix is wrong."
+      status=1
+      ;;
+    *FLAGGED-OUT-OF-DATE-*)
+      # NOT a failure. The name is right and this script's job is the name. It is printed loudly
+      # because it is the signal that this entry's distro plane has stopped tracking upstream, and
+      # that a host wanting it current should be on `nixagent.home.upstream` instead.
+      echo "WARN $pkg (AUR) -- $info"
+      ;;
+    *)
+      echo "OK   $pkg (AUR) -- $info"
+      ;;
+  esac
+done
+
+echo
+echo "== Vendor installers (upstream delivery plane) -- ${#upstreams[@]} entry/entries =="
+echo "   Each must still answer over HTTPS and still be a shell script. Neither is checkable at eval time."
+for triple in "${upstreams[@]}"; do
+  IFS='|' read -r key url runner <<<"$triple"
+  body="$(mktemp)"
+  if ! curl -fsSL --connect-timeout 10 --max-time 60 -o "$body" "$url"; then
+    echo "FAIL $key -- $url did not answer (curl exit $?). lib/agents.nix's upstream.url is stale."
     status=1
+    rm -f "$body"
+    continue
   fi
+  first="$(head -1 "$body")"
+  case "$first" in
+    '#!'*)
+      echo "OK   $key -- $url ($(wc -l <"$body" | tr -d ' ') lines, runner: $runner, shebang: $first)"
+      ;;
+    *)
+      echo "FAIL $key -- $url answered, but with something that is not a shell script: $first"
+      echo "     A 200 carrying an HTML error page reads exactly like this. lib/install-upstream.sh"
+      echo "     refuses it at activation; this is where you find out before a host does."
+      status=1
+      ;;
+  esac
+  rm -f "$body"
 done
 
 echo
 if command -v pacman >/dev/null 2>&1; then
   echo "== What THIS host resolves (pacman -Si) -- informational, never the authority for \`aur\` =="
   for pkg in "${official_names[@]}" "${aur_names[@]}"; do
-    if line="$(pacman -Si "$pkg" 2>/dev/null | sed -n 's/^Repository *: *//p' | head -1)" && [[ -n "$line" ]]; then
+    # `sed -n 1p` rather than `head -1`, and the pacman output captured before it is filtered.
+    # `head` closes the pipe after one line, which SIGPIPEs pacman, which under `set -o pipefail`
+    # made this branch fail non-deterministically -- a package that IS in a repository was reported
+    # as "(no repository on this host)" depending on how much output pacman had already flushed.
+    if out="$(pacman -Si "$pkg" 2>/dev/null)" \
+      && line="$(printf '%s\n' "$out" | sed -n 's/^Repository *: *//p' | sed -n 1p)" \
+      && [[ -n "$line" ]]; then
       echo "     $pkg -> $line"
     else
       echo "     $pkg -> (no repository on this host; expected for an AUR name here)"
