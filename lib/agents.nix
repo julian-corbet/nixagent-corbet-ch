@@ -141,6 +141,23 @@
 #                           idempotency probe (present -> nothing is fetched), the post-install
 #                           verification target, and the directory added to PATH. Its basename is
 #                           always the entry's `binary`; checks/agents-eval.nix asserts that.
+#                 nativeBinary
+#                           whether what lands is a NATIVE executable rather than a script or a
+#                           JS bundle. True for all three catalogued installers -- verified by
+#                           range-fetching the release artifacts, which declare
+#                           `INTERP /lib64/ld-linux-x86-64.so.2`.
+#
+#                           It exists because that path is a HOST REQUIREMENT a distro-agnostic
+#                           catalogue cannot assume: NixOS has no FHS and provides it only via
+#                           `programs.nix-ld`, configured rather than merely enabled. When true,
+#                           lib/install-upstream.sh preflights the loader and aborts before
+#                           downloading, instead of letting the binary fail at exec with an ENOENT
+#                           naming a file that is plainly present.
+#
+#                           A FIELD AND NOT AN UNCONDITIONAL CHECK, because "no loader" is fatal
+#                           only to a native artifact. An installer that dropped a shell script
+#                           would work perfectly on a host that fails this test, and refusing it
+#                           there would be a false negative rather than caution.
 #
 #               The prefix belongs to the INSTALLER, not to this catalogue: `installs` records
 #               where each vendor puts things, it does not decide it. They do not agree with each
@@ -231,6 +248,11 @@
         runner = "bash";
         args = [ ];
         installs = ".local/bin/claude";
+        # linux-x64 artifact: `Elf file type is EXEC`, `INTERP /lib64/ld-linux-x86-64.so.2`.
+        # Its musl fallback is unreachable on NixOS -- the detection is
+        # `[ -f /lib/libc.musl-*.so.1 ] || ldd /bin/ls | grep -q musl`, and NixOS has no /bin/ls,
+        # so it selects the glibc build on exactly the hosts that cannot run it unaided.
+        nativeBinary = true;
       };
 
       note = ''
@@ -311,6 +333,10 @@
         runner = "bash";
         args = [ "--no-modify-path" ];
         installs = ".opencode/bin/opencode";
+        # A native binary, and the one whose installer verifies NOTHING after unpacking -- no smoke
+        # test at all -- so a host without a loader gets a broken executable and no complaint from
+        # the vendor script. The loader preflight is what turns that into a legible failure.
+        nativeBinary = true;
       };
 
       note = ''
@@ -407,6 +433,10 @@
         args = [ "--binary" ];
 
         installs = ".local/bin/omp";
+        # omp-linux-x64: `INTERP /lib64/ld-linux-x86-64.so.2`, same as claude's. Its installer DOES
+        # smoke-test, and on failure exits 1 while LEAVING the broken binary in place -- the state
+        # lib/install-upstream.sh now clears rather than inheriting on the next activation.
+        nativeBinary = true;
       };
 
       note = ''

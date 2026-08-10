@@ -95,6 +95,10 @@ let
       "--max-time"
       (toString cfg.maxTimeSeconds)
     ]
+    # A valueless flag, emitted only when the catalogue says the artifact is native. Absent for an
+    # entry that installs a script, so the loader preflight does not refuse a host that would have
+    # run it fine.
+    ++ lib.optional t.upstream.nativeBinary "--native-binary"
     ++ lib.optionals (t.upstream.args != [ ]) ([ "--" ] ++ map shq t.upstream.args)
   );
 

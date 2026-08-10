@@ -53,6 +53,8 @@
 #   --probe REL              installed launcher, RELATIVE TO $HOME -- see the note below
 #   --url URL                the vendor's installer
 #   --runner bash|sh         interpreter to run it with
+#   [--native-binary]        what the installer lands is a native executable, so the host needs a
+#                            dynamic loader for it -- preflighted before anything is downloaded
 #   [--on-failure abort|warn]  default abort
 #   [--connect-timeout N]      default 10  (seconds)
 #   [--max-time N]             default 600 (seconds)
@@ -68,7 +70,7 @@
 # this repo, not a network condition, and hiding it behind a warning would hide the bug.
 nixagent_install_upstream() {
   local name="" command_name="" probe_rel="" url="" runner=""
-  local on_failure="abort" connect_timeout="10" max_time="600"
+  local on_failure="abort" connect_timeout="10" max_time="600" native_binary=""
   local -a installer_args=()
 
   while [ "$#" -gt 0 ]; do
@@ -77,6 +79,11 @@ nixagent_install_upstream() {
         shift
         installer_args=("$@")
         break
+        ;;
+      --native-binary)
+        native_binary=1
+        shift
+        continue
         ;;
       --name | --command | --probe | --url | --runner | --on-failure | --connect-timeout | --max-time)
         if [ "$#" -lt 2 ]; then
@@ -194,6 +201,12 @@ nixagent_install_upstream() {
 
     # ── THE DYNAMIC LOADER ──────────────────────────────────────────────────────────────────
     #
+    # Only for entries flagged `--native-binary`. Gating it matters in both directions: a host with
+    # no loader runs a SHELL-script installer perfectly well, so testing unconditionally would
+    # refuse installs that would have succeeded. (Found the honest way -- the check harness in
+    # ../checks/upstream-install.nix drives fake shell installers inside a nix sandbox, which has
+    # no FHS, and an unconditional test failed 25 of its 48 cases.)
+    #
     # Every installer in the catalogue delivers a NATIVE x86-64 glibc executable, not a script and
     # not a JS bundle -- verified by range-fetching the actual release artifacts, both of which
     # report `INTERP /lib64/ld-linux-x86-64.so.2`. A distribution that does not provide that path
@@ -213,15 +226,12 @@ nixagent_install_upstream() {
     # is left alone -- this preflight's job is to catch hosts that provably cannot run the artifact,
     # not to audit hosts that probably can.
     #
-    # If an entry is ever added whose installer delivers something interpreted, this check will be
-    # wrong for it and needs to become a per-entry flag in ../lib/agents.nix's `upstream` shape.
-    # It is unconditional today because today there is no such entry.
-    if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
+    if [ -n "$native_binary" ] && [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
       stage="preflight"
       detail="this host has no /lib64/ld-linux-x86-64.so.2, and the installer delivers a native glibc binary that cannot start without it. On NixOS set programs.nix-ld.enable = true (with programs.nix-ld.libraries populated), or deliver this tool through a distro plane instead"
       break
     fi
-    if [ -z "${NIX_LD:-}" ] && case "$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)" in *stub-ld*) true ;; *) false ;; esac; then
+    if [ -n "$native_binary" ] && [ -z "${NIX_LD:-}" ] && case "$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)" in *stub-ld*) true ;; *) false ;; esac; then
       stage="preflight"
       detail="/lib64/ld-linux-x86-64.so.2 is nix-ld's stub and NIX_LD is unset, so the stub will refuse to load anything. programs.nix-ld.enable is on but nothing is behind it -- populate programs.nix-ld.libraries, and make sure NIX_LD reaches this activation's environment"
       break
