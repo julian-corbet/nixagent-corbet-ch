@@ -111,11 +111,17 @@ let
   #
   # After `writeBoundary`: home.sessionPath and every managed file are in place first, so the
   # installer runs against the home this activation is building rather than the previous one.
+  # Prepended to PATH for the duration of the install, and ONLY for it -- this is a local `PATH=`
+  # on the activation's own environment, not `home.sessionPath`, because nothing here belongs in
+  # the user's interactive shell. Empty by default, which renders no line at all.
+  pathPrelude = lib.optionalString (cfg.extraPath != [ ])
+    "PATH=${lib.concatStringsSep ":" cfg.extraPath}\${PATH:+:$PATH}\nexport PATH\n";
+
   activationEntry = {
     before = [ ];
     after = [ "writeBoundary" ];
     data = ''
-      ${builtins.readFile ../lib/install-upstream.sh}
+      ${pathPrelude}${builtins.readFile ../lib/install-upstream.sh}
       ${lib.concatMapStringsSep "\n" installCall selected}
     '';
   };
@@ -184,6 +190,35 @@ in
         would otherwise append a PATH line to a shell rc file itself -- this module passes
         `--no-modify-path` to stop it (see lib/agents.nix), so switching this off on a host that
         selects opencode leaves the directory on no PATH at all.
+      '';
+    };
+
+    extraPath = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = lib.literalExpression ''
+        map (p: "''${p}/bin") (with pkgs; [ curl bash coreutils gnutar gzip unzip ])
+      '';
+      description = ''
+        Directories prepended to `PATH` for the upstream install, and for nothing else. Empty by
+        default, and on a host with an FHS it can stay that way -- `/usr/bin` already carries
+        everything a vendor installer reaches for.
+
+        IT CANNOT STAY EMPTY ON A NIX-MANAGED HOST, and the failure without it is not obvious.
+        A home-manager activation runs from a systemd unit, not a login shell, so it inherits
+        neither the user's `PATH` nor `home.sessionPath`. On NixOS that leaves the install with
+        essentially nothing: no `curl` to fetch the installer, no `bash` to run it, and none of the
+        `tar`/`unzip`/`uname` the installers themselves call. The preflight in
+        `lib/install-upstream.sh` tests the first two by name and reports this option, rather than
+        letting the vendor script fail at 127 in a way that reads like a network fault.
+
+        A LIST OF DIRECTORIES, not of packages, and deliberately so: this repo carries no nixpkgs
+        in its closure and installs nothing, so it cannot name `pkgs.curl` itself. Which store
+        paths satisfy it is the consumer's answer, the same way every other package identity in
+        this family of repos is.
+
+        Scoped to the activation on purpose. These tools exist for the installer's benefit; putting
+        them on the user's own `PATH` would be this module deciding which coreutils a human gets.
       '';
     };
 

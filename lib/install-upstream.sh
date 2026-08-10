@@ -173,9 +173,22 @@ nixagent_install_upstream() {
   # script has one) cannot abort before the diagnostic is built, and `$?` after a bare `if ! cmd`
   # is the status of the NEGATION, i.e. 0, which would report every failure as "exited 0".
   while :; do
+    # PATH inside an activation is NOT a login shell's PATH, and that is the trap these two checks
+    # exist for. On a distro with an FHS the ambient `/usr/bin` makes both of these free, so the
+    # gap is invisible until the first host without one -- where `curl` and the runner are simply
+    # absent and the failure surfaces as "exited 127" from something that looks like a network
+    # problem. `nixagent.home.extraPath` is what a consumer sets to close it.
     if ! command -v curl >/dev/null 2>&1; then
       stage="preflight"
-      detail="curl is not on PATH, and every catalogued installer needs it (they fetch their own payloads with it too)"
+      detail="curl is not on PATH, and every catalogued installer needs it (they fetch their own payloads with it too). If this is a NixOS/nix-managed home, set nixagent.home.extraPath to a list of directories carrying curl and the runner -- an activation script does not inherit a login shell's PATH"
+      break
+    fi
+
+    # The runner, checked for the same reason and separately: `bash` being absent is a different
+    # fault from `curl` being absent, and reporting them as one would send a reader to the network.
+    if ! command -v "$runner" >/dev/null 2>&1; then
+      stage="preflight"
+      detail="the installer's runner '$runner' is not on PATH. This is not a network fault -- see nixagent.home.extraPath"
       break
     fi
 
