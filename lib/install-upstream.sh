@@ -179,6 +179,41 @@ nixagent_install_upstream() {
       break
     fi
 
+    # ── THE DYNAMIC LOADER ──────────────────────────────────────────────────────────────────
+    #
+    # Every installer in the catalogue delivers a NATIVE x86-64 glibc executable, not a script and
+    # not a JS bundle -- verified by range-fetching the actual release artifacts, both of which
+    # report `INTERP /lib64/ld-linux-x86-64.so.2`. A distribution that does not provide that path
+    # cannot run any of them, and the failure surfaces as ENOENT on the LOADER, which the shell
+    # reports as "no such file or directory" naming a binary that plainly exists -- one of the
+    # least legible errors in Unix, and worth spending a preflight to never see.
+    #
+    # NixOS is the case this is written for: it has no FHS, so the path is absent unless
+    # `programs.nix-ld.enable` is set. Checking existence alone is NOT enough. Merely having nix-ld
+    # in the closure installs a STUB at that path whose only job is to refuse and print an
+    # explanation; the real loader is behind `NIX_LD`, and if that is unset the stub is all there
+    # is. So an unconfigured NixOS host passes a naive `[ -e ]` and fails anyway, later, after a
+    # download and with a worse message.
+    #
+    # Both halves are therefore tested, and only the two unambiguous states fail: the path is
+    # missing entirely, or it resolves to nix-ld's stub with no `NIX_LD` behind it. Anything else
+    # is left alone -- this preflight's job is to catch hosts that provably cannot run the artifact,
+    # not to audit hosts that probably can.
+    #
+    # If an entry is ever added whose installer delivers something interpreted, this check will be
+    # wrong for it and needs to become a per-entry flag in ../lib/agents.nix's `upstream` shape.
+    # It is unconditional today because today there is no such entry.
+    if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
+      stage="preflight"
+      detail="this host has no /lib64/ld-linux-x86-64.so.2, and the installer delivers a native glibc binary that cannot start without it. On NixOS set programs.nix-ld.enable = true (with programs.nix-ld.libraries populated), or deliver this tool through a distro plane instead"
+      break
+    fi
+    if [ -z "${NIX_LD:-}" ] && case "$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)" in *stub-ld*) true ;; *) false ;; esac; then
+      stage="preflight"
+      detail="/lib64/ld-linux-x86-64.so.2 is nix-ld's stub and NIX_LD is unset, so the stub will refuse to load anything. programs.nix-ld.enable is on but nothing is behind it -- populate programs.nix-ld.libraries, and make sure NIX_LD reaches this activation's environment"
+      break
+    fi
+
     tmpdir="$(mktemp -d)" || tmpdir=""
     if [ -z "$tmpdir" ] || [ ! -d "$tmpdir" ]; then
       stage="preflight"
@@ -278,6 +313,32 @@ nixagent_install_upstream() {
       printf "    the '%s' command is NOT available for this user.\n" "$command_name"
       printf '\n'
     } >&2
+
+    # ── THE FAILED STATE MUST NOT BE ABSORBING ────────────────────────────────────────────────
+    #
+    # Everything above this function is idempotent by testing `-x "$probe"` and returning early.
+    # If a failed run were allowed to leave an executable at `$probe`, that test would pass on the
+    # NEXT activation and the install would be skipped -- so a run that failed loudly here would be
+    # laundered into a silent success, permanently, with a broken binary in place. No later switch
+    # could ever detect or repair it; only a human deleting the file by hand.
+    #
+    # That state is reachable and not hypothetical. Two of the three upstream installers create it
+    # on their own failure path: omp's downloads the binary, chmod +x's it, smoke-tests it and
+    # `exit 1`s WITHOUT removing it; opencode's has no smoke test at all, so a truncated or
+    # wrong-architecture download lands executable and is only caught by the `--version` probe
+    # below. On a host with no dynamic loader for these glibc binaries (see README, "Host
+    # requirements") that is the ordinary outcome rather than the rare one.
+    #
+    # So the artifact goes. Removing it costs one re-download on the next activation; keeping it
+    # costs the ability to ever notice again. `rm -f` and not a guarded test: it follows the same
+    # convention as the `-x` gate, and a dangling symlink -- a version directory pruned out from
+    # under the entry point -- must be cleared too, which `[ -e ]` would report as absent.
+    #
+    # A binary that installed correctly but whose `--version` cannot start is deleted by this too.
+    # That is intended and not collateral: this plane's claim is "installed AND verified", and an
+    # unverifiable binary it silently kept would be exactly the claim it must not make.
+    rm -f -- "$probe"
+
     if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
     if [ "$on_failure" = "warn" ]; then
       return 0

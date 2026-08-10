@@ -25,7 +25,8 @@ nixarch.packages.aur    = config.nixagent.aurPackages;
 
 **The upstream plane** (`modules/home.nix`, home-manager) runs the tool's *own* installer into the
 vendor's *own* per-user prefix, once, and puts it on PATH. This is how a NixOS host gets these
-tools at all, and how any host gets one whose distro package has fallen behind.
+tools at all — *given the host requirement below* — and how any host gets one whose distro package
+has fallen behind.
 
 ```nix
 nixagent.home.upstream = [ "claude-code" "omp" ];   # claude-code | omp | opencode
@@ -101,13 +102,33 @@ The two modes answer different questions, and neither wins globally:
 |---|---|---|
 | Updates via | `pacman -Syu`, with the host's other packages | the tool's own updater |
 | Freshness bounded by | a packager | the vendor's own release |
-| Needs | a package manager and (for AUR) a helper | `curl` and a `$HOME` |
-| Works on NixOS | no | yes |
+| Needs | a package manager and (for AUR) a helper | `curl`, a `$HOME`, **and a dynamic loader** |
+| Works on NixOS | no | yes — *only with `programs.nix-ld`*, see below |
 | Removes cleanly | **yes** — pacman owns the files | **no** — nothing owns the files |
 
 That last row is the honest cost: deselecting a tool on the upstream plane leaves the binary
 exactly where it was. Full write-up:
 [`studies/the-aur-lags-upstream-too.md`](studies/the-aur-lags-upstream-too.md).
+
+### Host requirement: a dynamic loader for foreign binaries
+
+Every catalogued installer delivers a **native x86-64 glibc executable** — not a script, not a JS
+bundle. Both artifacts declare `INTERP /lib64/ld-linux-x86-64.so.2`, a path NixOS does not have.
+
+So on NixOS the upstream plane needs `programs.nix-ld`, and needs it *configured*, not merely
+enabled — a host with nix-ld in the closure but nothing behind it installs a **stub** at that path
+whose entire job is to refuse. That state passes a naive existence check and fails at run time, so
+`lib/install-upstream.sh` tests for it by name and aborts in `stage: preflight` with the option to
+set, before anything is downloaded.
+
+```nix
+programs.nix-ld.enable = true;
+programs.nix-ld.libraries = with pkgs; [ stdenv.cc.cc.lib zlib openssl ];
+```
+
+Claude's installer cannot route around this by picking its musl build: its libc detection is
+`[ -f /lib/libc.musl-*.so.1 ] || ldd /bin/ls | grep -q musl`, and NixOS has no `/bin/ls`, so it
+selects the glibc artifact on exactly the hosts that cannot run it.
 
 ### How idempotency and failure work
 
