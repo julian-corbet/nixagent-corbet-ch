@@ -43,6 +43,7 @@ let
   warned = evalWith { upstream = [ "claude-code" ]; onInstallFailure = "warn"; };
   noPath = evalWith { upstream = [ "claude-code" ]; addToPath = false; };
   tuned = evalWith { upstream = [ "omp" ]; connectTimeoutSeconds = 3; maxTimeSeconds = 42; };
+  codexOnly = evalWith { upstream = [ "openai-codex" ]; };
 
   script = c: c.home.activation.nixagentUpstream.data;
   contains = needle: hay: lib.hasInfix needle hay;
@@ -127,6 +128,34 @@ let
       let calls = lib.filter (l: contains "--name 'claude-code'" l) (callLines allThree);
       in lib.length calls == 1 && !(contains " -- " (lib.head calls));
 
+    # ── The loader flag is emitted per entry, and codex is the case that proves it ────────────
+    # Three of the four need /lib64/ld-linux-x86-64.so.2; codex is a static-PIE musl build and
+    # needs nothing. Emitting the flag for it would make lib/install-upstream.sh refuse to install
+    # on a host with no nix-ld that could have run the binary perfectly well -- so the ABSENCE is
+    # the assertion, and it is asserted on the codex call line specifically rather than on the
+    # whole script, where another entry's flag would satisfy a naive `contains`.
+    "the loader flag is per-entry: emitted for the three glibc installers, absent for codex" =
+      lib.all (l: contains "--needs-dynamic-loader" l) (callLines allThree)
+      && !(contains "--needs-dynamic-loader" (lib.head (callLines codexOnly)));
+
+    # codex's installer has no --no-modify-path equivalent and prompts unless this variable is set.
+    # Rendered as one quoted shell word: `--env 'NAME=VALUE'`, not two arguments.
+    #
+    # Asserted against the CALL LINES and not the whole script, which is the trap this comment
+    # exists for: the activation data is the inlined lib/install-upstream.sh followed by the calls,
+    # and that library parses `--env` itself. A `contains` over the script therefore matches the
+    # PARSER and would report every entry as rendering an env var.
+    "codex renders its non-interactive env var, quoted as a single word, and no other entry renders one" =
+      lib.all (l: contains "--env 'CODEX_NON_INTERACTIVE=1'" l) (callLines codexOnly)
+      && !(lib.any (l: contains "--env" l) (callLines allThree));
+
+    "codex renders the rest of its identity: sh runner, chatgpt.com installer, probe .local/bin/codex, command codex, and no flags" =
+      contains "--url 'https://chatgpt.com/codex/install.sh' --runner 'sh'" (script codexOnly)
+      && contains "--probe '.local/bin/codex'" (script codexOnly)
+      && contains "--command 'codex'" (script codexOnly)
+      && contains "--name 'openai-codex'" (script codexOnly)
+      && !(contains " -- " (lib.head (callLines codexOnly)));
+
     # ── Failure mode and timeouts reach the script ────────────────────────────────────────────
     "the default failure mode is abort -- a switch that goes green without the command is the failure this plane exists to refuse" =
       contains "--on-failure 'abort'" (script claudeOnly)
@@ -177,8 +206,17 @@ let
     "a desktop entry with no vendor installer is refused the same way -- claude-cowork-linux is a third-party repackaging with nothing to run" =
       (builtins.tryEval (builtins.deepSeq (evalWith { upstream = [ "claude-cowork-linux" ]; }).nixagent.home.upstream true)).success == false;
 
+    # openai-codex is deliberately NOT in the refused pair any more -- it moved into the selectable
+    # set on 2026-08-11 when its real installer URL was found. Asserted as selectable in the
+    # positive direction too, because "no longer an eval error" is exactly the kind of change a
+    # negative-only assertion cannot see.
+    "openai-codex is selectable, not refused -- the entry whose recorded 403 came from a URL the vendor never used" =
+      (builtins.tryEval (builtins.deepSeq codexOnly.nixagent.home.upstream true)).success == true
+      && codexOnly.nixagent.home.paths == { openai-codex = "/home/tester/.local/bin/codex"; }
+      && codexOnly.nixagent.home.binaries == { openai-codex = "codex"; };
+
     "the selectable set is DERIVED from the catalogue, not hand-listed here or in the module" =
-      sortedList installableNames == [ "claude-code" "omp" "opencode" ];
+      sortedList installableNames == [ "claude-code" "omp" "openai-codex" "opencode" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

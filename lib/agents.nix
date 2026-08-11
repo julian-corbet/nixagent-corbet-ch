@@ -39,60 +39,60 @@
 #     "Runs in a terminal" is a shape, not a domain; nixsh's claim is the domain "every host needs
 #     this", and these fail it regardless of shape.
 #
-# ── THE RULE THIS REPO EXISTS FOR: NEVER nixpkgs ───────────────────────────────────────────────
+# ── THE RULE THIS REPO EXISTS FOR: NEVER nixpkgs, AND THE REASON IS NOT FRESHNESS ──────────────
 #
 # Every entry below carries `nixpkgs = null`. That null is a POLICY, not an absence, and the
 # distinction matters enough to mechanise: checks/agents-eval.nix asserts it for every entry, so an
 # addition that names a real nixpkgs attribute fails `nix flake check` rather than quietly opening
 # the door this repo was drawn to keep shut.
 #
-# nixpkgs really does carry four of the five CLIs. Force-evaluated against a pinned revision on
-# 2026-08-07 -- not `hasAttrByPath` alone, which cannot tell a live attribute from a
-# rename-to-throw:
+# nixpkgs really does carry four of the five CLIs. Force-evaluated -- not `hasAttrByPath` alone,
+# which cannot tell a live attribute from a rename-to-throw. Re-measured 2026-08-11 against
+# nixpkgs-unstable HEAD d482ef84, with each project's own release feed and the Arch package API
+# alongside, because the ONLY honest version of this table is one with all three columns:
 #
-#   pkgs.claude-code  2.1.220   (pacman: 2.1.222-1)
-#   pkgs.gemini-cli   0.47.0    (pacman: 0.50.0-1)
-#   pkgs.codex        0.146.0   (pacman: openai-codex 0.146.1-1)
-#   pkgs.opencode     1.18.11   (pacman: 1.18.14-1)
+#                     nixpkgs-unstable   Arch/AUR            upstream
+#     claude-code     2.1.226            2.1.222 (cachyos)   2.1.226
+#     opencode        1.18.13            1.18.16 (extra)     1.18.16
+#     codex           0.147.0            0.146.1 (extra)     0.147.0
+#     gemini-cli      0.47.0             1:0.50.0 (extra)    0.54.4
+#     omp             -- absent --       17.2.2 (AUR, flagged out of date)   17.2.12
 #
-# `omp` is the exception and is absent from nixpkgs entirely (re-checked 2026-08-10) -- but it does
-# not weaken the rule, it sharpens it: the attribute a reader would reach for, `pi-coding-agent`,
-# is a DIFFERENT AGENT. See that entry for the measurement. Nothing below may name a nixpkgs
-# attribute whether or not one exists.
+# READ THAT TABLE HONESTLY: nixpkgs is not uniformly behind. It is AHEAD of Arch for codex and for
+# claude-code, level for opencode's packaging lag, and catastrophically behind only for gemini-cli
+# -- which nixpkgs is winding down rather than tracking (see that entry). An earlier revision of
+# this header claimed "every one of the four is behind the distro package". That was true of the
+# snapshot it was taken from (2026-08-03) and is false now. Freshness is a race that changes hands
+# week to week, so a rule resting on it would have to be re-argued every week.
 #
-# So the reason is not availability. It is two measured properties of this class of tool:
+# THE RULE DOES NOT REST ON IT. It rests on ONE structural property, and this is the whole reason:
 #
-#   1. THEY SELF-UPDATE. Each of these ships its own updater and expects to rewrite its own install
-#      on a release cadence measured in days. A nix-store path is read-only, so the updater cannot
-#      run at all -- the version freezes until a human bumps a flake.lock by hand, and the tool
-#      spends the interval telling its operator to update while being structurally unable to.
-#      A distro package is mutable enough that `pacman -Syu` is the updater, which is the outcome
-#      wanted.
-#   2. NIXPKGS LAGS, and the table above is the measurement, not an impression -- every one of the
-#      four is behind the distro package, one of them by three minor releases. That is nobody's
-#      fault: a nixpkgs derivation pins and hashes a release, and these projects release faster
-#      than that pipeline settles.
+#     THESE TOOLS SELF-UPDATE, AND A STORE PATH IS READ-ONLY.
 #
-# Both point the same way, so this repo does not offer the choice. There is no `nixpkgs` field to
-# fill in and no `nixosModules` output -- see ../README.md's own section.
+# Each of them ships its own updater and expects to rewrite its own install on a cadence measured
+# in days. `/nix/store` is immutable by construction, so the updater cannot run AT ALL -- not
+# slowly, not with a warning: the version freezes until a human bumps a flake.lock, and the tool
+# spends the interval telling its operator to update while being structurally unable to. That
+# argument does not depend on how fresh nixpkgs is, and a nixpkgs that was perfectly current would
+# still fail it. Freshness is the symptom; immutability is the cause.
+#
+# So there is no `nixpkgs` field to fill in and no `nixosModules` output -- see ../README.md.
+#
+# ⚠ AND THE BOUNDARY THAT FOLLOWS, because "never nixpkgs" has been over-read as "never nix":
+# the prohibition is on nix owning the TOOL. It says nothing about nix supplying the tool's
+# RUNTIME or the installer's own dependencies. `programs.nix-ld` providing a loader, and
+# `nixagent.home.extraPath` handing the installer a nixpkgs curl and bash, are not exceptions to
+# the rule -- they are the rule working. Nix builds the ground the vendor's artifact stands on;
+# the artifact stays the vendor's.
 #
 # ── TWO DELIVERY MODES, BECAUSE THE AUR IS NOT ALWAYS FRESH EITHER ─────────────────────────────
 #
 # The reasoning above is about nixpkgs, and it holds. What it does NOT establish is that a distro
-# package is always current -- and for a fast-moving entry it measurably is not. Checked
-# 2026-08-10 against the AUR RPC and each project's own release feed:
-#
-#   omp            upstream 17.2.12 (released 2026-08-09)
-#                  AUR oh-my-pi-bin 17.2.2-1, FLAGGED OUT-OF-DATE 2026-08-08
-#                  AUR oh-my-pi     17.2.3-1, FLAGGED OUT-OF-DATE 2026-08-04
-#   claude-code    upstream 2.1.226 (downloads.claude.ai/claude-code-releases/latest)
-#                  AUR 2.1.220-1, FLAGGED OUT-OF-DATE 2026-08-04; cachyos repo 2.1.222-1
-#   opencode       upstream 1.18.16 (released 2026-08-10); Arch extra 1.18.15-1
-#   gemini-cli     upstream 0.54.4;  Arch extra 1:0.50.0-1
-#
-# Ten patch releases behind, with an `omp-updater` bot listed as a co-maintainer on both AUR
-# packages, is the same failure mode as a stale nixpkgs derivation wearing a different hat. A
-# packager is a human in the loop of a project that ships several times a week.
+# package is always current -- and for a fast-moving entry it measurably is not. The `omp` and
+# `gemini-cli` rows above are the measurement: an `omp-updater` bot is listed as a co-maintainer on
+# both AUR packages and they are ten patch releases behind anyway. That is the same failure mode as
+# a stale nixpkgs derivation wearing a different hat. A packager is a human in the loop of a
+# project that ships several times a week.
 #
 # So a SECOND delivery mode exists alongside the distro one: run the VENDOR's own installer into
 # the vendor's own per-user prefix, which is what these projects actually support and test, and
@@ -100,6 +100,26 @@
 # consumer -- pacman/AUR on an Arch box that already reconciles packages, upstream on a NixOS box
 # that has no such reconciler and would otherwise get nothing at all. Neither is forced, and this
 # file makes no attempt to rank them: which one is right is a fact about the host.
+#
+# ── WHAT A HOST WITH NEITHER IS SUPPOSED TO DO ─────────────────────────────────────────────────
+#
+# A NixOS host has no pacman, so the upstream plane is its ONLY plane here, and an entry whose
+# vendor ships no installer is simply absent on it. That is a real limit and it is recorded rather
+# than papered over -- `upstream = null` is a finding with a date and a method attached, and
+# ../modules/home.nix derives its option type from the entries that have one, so selecting such a
+# tool is an eval error instead of an activation that quietly fetches nothing.
+#
+# It is a limit, NOT a licence to reach for nixpkgs: the structural argument above applies hardest
+# to exactly these entries. The catalogued way out is a vendor installer appearing, which is not
+# hypothetical -- `openai-codex` sat at `upstream = null` for four days on a measured 403 and now
+# carries a live record, because the URL that answered 403 was never the vendor's (see that entry).
+# Re-probe before concluding a tool is unreachable; a 403 is a fact about a URL, not about a tool.
+#
+# The other candidate ways out have been considered and are NOT accepted as an upstream mode:
+# `npm install -g` installs into whichever node prefix the host happens to have configured, which
+# makes `installs` a property of the host rather than of the tool -- if that is ever wanted, the
+# prefix belongs on a module option and the package name in a field of its own, not smuggled into
+# this one. Nothing below invents either.
 #
 # Mechanically the two modes live on different planes: `arch`/`aur`/`archRepoOn` feed
 # ../modules/nixagent.nix (system-manager, publishes package-name lists), `upstream` feeds
@@ -137,27 +157,42 @@
 #                 args      flags needed to make the install DETERMINISTIC. Not cosmetic -- see
 #                           the omp and opencode entries, where the default invocation either
 #                           installs somewhere else entirely or edits the user's shell rc files.
+#                 env       (default { }) environment variables exported FOR THE INSTALLER RUN
+#                           ONLY, for a vendor whose non-interactive switch is an env var rather
+#                           than a flag. Same job as `args` and the same standard of evidence:
+#                           nothing goes in here that the vendor does not itself document or use.
+#                           Exists for `openai-codex`, whose installer has exactly two flags
+#                           (`--release`, `--help`) and gates every prompt on `CODEX_NON_INTERACTIVE`
+#                           -- and whose OWN self-updater sets that variable when re-running it.
 #                 installs  the launcher the installer creates, RELATIVE TO $HOME. This is the
 #                           idempotency probe (present -> nothing is fetched), the post-install
 #                           verification target, and the directory added to PATH. Its basename is
 #                           always the entry's `binary`; checks/agents-eval.nix asserts that.
-#                 nativeBinary
-#                           whether what lands is a NATIVE executable rather than a script or a
-#                           JS bundle. True for all three catalogued installers -- verified by
-#                           range-fetching the release artifacts, which declare
-#                           `INTERP /lib64/ld-linux-x86-64.so.2`.
-#
-#                           It exists because that path is a HOST REQUIREMENT a distro-agnostic
-#                           catalogue cannot assume: NixOS has no FHS and provides it only via
-#                           `programs.nix-ld`, configured rather than merely enabled. When true,
-#                           lib/install-upstream.sh preflights the loader and aborts before
-#                           downloading, instead of letting the binary fail at exec with an ENOENT
-#                           naming a file that is plainly present.
+#                 needsDynamicLoader
+#                           whether the artifact that lands requires the FHS dynamic loader at
+#                           `/lib64/ld-linux-x86-64.so.2`. That is a HOST REQUIREMENT a
+#                           distro-agnostic catalogue cannot assume: NixOS has no FHS and provides
+#                           the path only via `programs.nix-ld`, configured rather than merely
+#                           enabled. When true, lib/install-upstream.sh preflights the loader and
+#                           aborts before downloading, instead of letting the binary fail at exec
+#                           with an ENOENT naming a file that is plainly present.
 #
 #                           A FIELD AND NOT AN UNCONDITIONAL CHECK, because "no loader" is fatal
-#                           only to a native artifact. An installer that dropped a shell script
-#                           would work perfectly on a host that fails this test, and refusing it
-#                           there would be a false negative rather than caution.
+#                           only to an artifact that wants one. An installer that dropped a shell
+#                           script would work perfectly on a host that fails this test, and
+#                           refusing it there would be a false negative rather than caution.
+#
+#                           ⚠ IT IS NOT "IS THIS A NATIVE BINARY", which is what this field was
+#                           called until 2026-08-11 and is the reason it is not called that now.
+#                           `openai-codex` ships the most native artifact in the catalogue -- a
+#                           258 MB Rust executable -- and needs NO loader, because it is a
+#                           static-PIE musl build with no PT_INTERP segment at all (verified by
+#                           parsing the program headers of the release asset: 9 phdrs, 4x LOAD +
+#                           DYNAMIC/TLS/GNU_EH_FRAME/GNU_STACK/GNU_RELRO, no INTERP). Naming the
+#                           field after the artifact rather than after the requirement would have
+#                           made codex demand nix-ld on hosts that can run it bare -- a false
+#                           prerequisite, which is precisely the false negative the paragraph above
+#                           says this field exists to avoid.
 #
 #               The prefix belongs to the INSTALLER, not to this catalogue: `installs` records
 #               where each vendor puts things, it does not decide it. They do not agree with each
@@ -252,7 +287,7 @@
         # Its musl fallback is unreachable on NixOS -- the detection is
         # `[ -f /lib/libc.musl-*.so.1 ] || ldd /bin/ls | grep -q musl`, and NixOS has no /bin/ls,
         # so it selects the glibc build on exactly the hosts that cannot run it unaided.
-        nativeBinary = true;
+        needsDynamicLoader = true;
       };
 
       note = ''
@@ -266,17 +301,27 @@
       binary = "gemini";
       nixpkgs = null;
 
-      # NO VENDOR INSTALLER, checked rather than assumed (2026-08-10): the two plausible URLs a
-      # `curl | bash` line would live at -- gemini.google.com/install.sh and the repository's own
-      # install.sh on main -- both return 404. Google distributes this through npm
-      # (`@google/gemini-cli`) and Homebrew, plus standalone binaries attached to each GitHub
-      # release with no script to place them.
+      # NO VENDOR INSTALLER, and RE-PROBED 2026-08-11 rather than left on the earlier note --
+      # because the sibling entry below shows what a stale probe costs. Every candidate answers 404
+      # (raw .../main/install.sh, .../master/install.sh, .../main/scripts/install.sh), gemini-cli.dev
+      # does not resolve, and storage.googleapis.com/gemini-cli/install.sh answers 403. The README
+      # documents npx, `npm install -g`, Homebrew, MacPorts and conda -- no shell installer.
+      #
+      # AND NO BINARY TO PLACE EITHER, which the earlier note got wrong by inference. The last 15
+      # releases (stable, preview and nightly alike) carry an IDENTICAL three-asset set:
+      # gemini-cli-bundle.zip plus two darwin zips. There is no Linux artifact at all, and the
+      # bundle is not one -- `gemini.js` opens `#!/usr/bin/env node`. The project's own
+      # scripts/build_binary.js has a working linux branch; Google simply does not publish its
+      # output. So this is npm/Node-only on Linux, not "binaries with no script to place them".
       #
       # `npm install -g` is deliberately NOT accepted as an upstream mode here. It installs into
       # whichever node prefix happens to be configured -- a nix-store node's prefix is read-only,
       # a system node's is root-owned -- so the destination this catalogue would have to record as
       # `installs` is a property of the host's node setup rather than of the tool. That is exactly
-      # the ambiguity the probe path exists to remove.
+      # the ambiguity the probe path exists to remove. It is not unfixable, and the header says
+      # where the fix would have to live (a module option for the prefix, a field for the package
+      # name); it is not built because nothing has asked for it and this entry may not be the one
+      # to ask -- see the retirement note below.
       upstream = null;
 
       note = ''
@@ -287,6 +332,16 @@
         Distro-plane only: with no vendor installer, a host that cannot use pacman gets nothing
         for this entry, and says so at eval time rather than at runtime -- `nixagent.home.upstream`
         is typed to the entries that HAVE an installer, so naming this one there is a type error.
+
+        ⚠ THE VENDOR IS RETIRING IT, which is context this catalogue should carry before anyone
+        spends effort widening a plane to reach it. Google announced Gemini CLI's replacement by
+        Antigravity CLI, and nixpkgs marked the package accordingly on 2026-08-07:
+        `meta.problems.removal.message` reads "Unpaid tier and Google AI Pro/Ultra users: Gemini
+        CLI was replaced by Antigravity CLI." That also explains the freshest measurement in this
+        file's header -- nixpkgs has not bumped this package since 2026-06-22 and is 8 stable
+        releases behind, which is a wind-down rather than a packaging lag. `antigravity-cli` is
+        already in nixpkgs (1.1.11, a fetched-binary package). Whether this catalogue follows the
+        vendor there is a decision for a consumer, not something to infer here.
       '';
     };
 
@@ -295,11 +350,54 @@
       binary = "codex";
       nixpkgs = null;
 
-      # NO VENDOR INSTALLER (checked 2026-08-10: openai.com/codex/install.sh answers 403, and the
-      # project documents npm/Homebrew plus per-release tarballs). Same npm reasoning as
-      # `gemini-cli` above: a node prefix is a fact about the host, not about the tool, so there
-      # is no honest `installs` path to record.
-      upstream = null;
+      # ⚠ THIS ENTRY READ `upstream = null` FROM 2026-08-07 TO 2026-08-11, AND THAT WAS WRONG.
+      # The recorded finding was "openai.com/codex/install.sh answers 403". The URL answers 403
+      # because it was never OpenAI's -- the installer is served from a different host entirely,
+      # and the project README has documented it the whole time:
+      #
+      #     curl -fsSL https://chatgpt.com/codex/install.sh | sh        -> HTTP 200, 30285 bytes
+      #
+      # A 403 is a fact about a URL, not about a tool, and treating one as the other kept this tool
+      # off every NixOS host for four days. The lesson is in the header: re-probe before concluding
+      # a vendor ships nothing, and probe what the vendor DOCUMENTS rather than what a naming
+      # convention suggests.
+      #
+      # `sh`, not bash: the script opens `#!/bin/sh` and is POSIX throughout.
+      #
+      # NO `args`, because there are only two (`--release VERSION`, `--help`) and neither is
+      # wanted -- pinning a release here would reintroduce exactly what this plane avoids. The two
+      # non-default behaviours this install DOES need steering are handled the only ways the vendor
+      # offers, and both are load-bearing:
+      #
+      #   1. `env.CODEX_NON_INTERACTIVE = "1"`. The installer ends in `maybe_launch_codex_now`,
+      #      which calls `prompt_yes_no "Start Codex now?"`. That helper returns early only for
+      #      this variable; otherwise it tests `( : </dev/tty )` FIRST, before `[ -t 0 ]`. An
+      #      activation run from a systemd unit has no tty and would fall through harmlessly -- but
+      #      a `home-manager switch` typed at a terminal HAS one, so the switch would stop at an
+      #      interactive prompt and, if answered, launch a TUI from inside an activation script.
+      #      Not a guess at a magic variable either: codex's own updater re-runs this installer as
+      #      `curl -fsSL <url> | CODEX_NON_INTERACTIVE=1 sh` (codex-rs/tui/src/update_action.rs).
+      #   2. The PATH prepend in ../lib/install-upstream.sh. This installer has NO
+      #      `--no-modify-path` equivalent: its `add_to_path` returns early ONLY when `$BIN_DIR` is
+      #      already in `$PATH`, and otherwise writes a `# >>> Codex installer >>>` block into a
+      #      shell rc chosen by `pick_profile` (~/.bashrc, ~/.zshrc, or ~/.profile for any other
+      #      shell -- fish lands in the last). An activation inherits no login PATH, so without the
+      #      prepend this installer edits a file nix believes it owns, on every fresh install.
+      upstream = {
+        url = "https://chatgpt.com/codex/install.sh";
+        runner = "sh";
+        args = [ ];
+        env = { CODEX_NON_INTERACTIVE = "1"; };
+        installs = ".local/bin/codex";
+
+        # FALSE, and it is the entry that made the field's name a bug worth fixing -- see the
+        # `needsDynamicLoader` documentation in the FIELDS section above. Every Linux artifact in
+        # the release is `-unknown-linux-musl`; there is no `-linux-gnu` build of the CLI at all.
+        # Program headers parsed off the actual asset: ET_DYN, 9 phdrs, 4x LOAD + DYNAMIC + TLS +
+        # GNU_EH_FRAME + GNU_STACK + GNU_RELRO. No INTERP segment, so it is a static PIE and starts
+        # on a host with no FHS and no nix-ld whatsoever.
+        needsDynamicLoader = false;
+      };
 
       note = ''
         OpenAI's terminal coding agent (github.com/openai/codex). Official upstream Arch `extra`
@@ -309,6 +407,14 @@
         the pacman package is `openai-codex` (the bare `codex` is taken on Arch), the command it
         installs is `codex`, and the project repository is `openai/codex`. A caller that guesses
         either name from the other is wrong half the time -- which is what `binary` is for.
+
+        The installer places versioned release directories under `~/.codex/packages/standalone` and
+        points `~/.local/bin/codex` at the current one, so `codex update` keeps working afterwards
+        -- which is the post-condition this whole plane exists for. Where a store path WOULD have
+        broken it is worth recording precisely, because codex fails softly rather than loudly:
+        `install-context` classifies an unrecognised exe path as `InstallMethod::Other`, which maps
+        to no update action, so the TUI silently stops offering updates and `codex update` exits
+        with "Could not detect the Codex installation method". Frozen, with no error to search for.
       '';
     };
 
@@ -333,10 +439,10 @@
         runner = "bash";
         args = [ "--no-modify-path" ];
         installs = ".opencode/bin/opencode";
-        # A native binary, and the one whose installer verifies NOTHING after unpacking -- no smoke
+        # A glibc binary, and the one whose installer verifies NOTHING after unpacking -- no smoke
         # test at all -- so a host without a loader gets a broken executable and no complaint from
         # the vendor script. The loader preflight is what turns that into a legible failure.
-        nativeBinary = true;
+        needsDynamicLoader = true;
       };
 
       note = ''
@@ -436,7 +542,7 @@
         # omp-linux-x64: `INTERP /lib64/ld-linux-x86-64.so.2`, same as claude's. Its installer DOES
         # smoke-test, and on failure exits 1 while LEAVING the broken binary in place -- the state
         # lib/install-upstream.sh now clears rather than inheriting on the next activation.
-        nativeBinary = true;
+        needsDynamicLoader = true;
       };
 
       note = ''

@@ -95,10 +95,20 @@ let
       "--max-time"
       (toString cfg.maxTimeSeconds)
     ]
-    # A valueless flag, emitted only when the catalogue says the artifact is native. Absent for an
-    # entry that installs a script, so the loader preflight does not refuse a host that would have
-    # run it fine.
-    ++ lib.optional t.upstream.nativeBinary "--native-binary"
+    # A valueless flag, emitted only when the catalogue says the artifact needs the FHS loader.
+    # Absent for an entry that installs a script OR a static binary, so the loader preflight does
+    # not refuse a host that would have run it fine -- codex is the second case and the reason the
+    # field is named after the requirement rather than after the artifact.
+    ++ lib.optional t.upstream.needsDynamicLoader "--needs-dynamic-loader"
+
+    # `--env NAME=VALUE`, one per pair, sorted so the rendered script is stable across evaluations
+    # -- `attrNames` is already sorted, and checks/home-eval.nix pins the exact text. Empty for
+    # every entry but codex, whose installer gates its interactive prompt on an environment
+    # variable rather than a flag. Rendered as ONE shell word so a value containing a space cannot
+    # split into a second argument.
+    ++ lib.concatMap (n: [ "--env" (shq "${n}=${t.upstream.env.${n}}") ])
+      (lib.attrNames (t.upstream.env or { }))
+
     ++ lib.optionals (t.upstream.args != [ ]) ([ "--" ] ++ map shq t.upstream.args)
   );
 
@@ -146,9 +156,14 @@ in
         lib/agents.nix's own header.
 
         The list is typed to the catalogue entries that HAVE a vendor installer. Naming one that
-        does not (`gemini-cli`, `openai-codex`, `claude-cowork-linux` -- each records what was
-        checked) fails at eval time, which is the point: the alternative is an activation that
-        looks fine and installs nothing.
+        does not (`gemini-cli`, `claude-cowork-linux` -- each records what was checked, with a
+        date and a method) fails at eval time, which is the point: the alternative is an activation
+        that looks fine and installs nothing.
+
+        THE SET IS NOT FIXED AND HAS GROWN. `openai-codex` was in that refused list until
+        2026-08-11, on a recorded 403 -- from a URL OpenAI never served the installer from. Its
+        real one has been in the project README the whole time. Re-probe before treating an
+        installer-less entry as permanent; the catalogue records findings, not verdicts.
 
         NIX DOES NOT OWN WHAT THIS INSTALLS. The installer runs once, when the tool is absent, and
         never again while it is present; from then on the tool updates itself, which is the
@@ -187,13 +202,16 @@ in
         a delivered tool -- half the contract this module states.
 
         The directories come from the catalogue (`upstream.installs`), so they are whatever each
-        VENDOR chose: `~/.local/bin` for claude-code and omp, `~/.opencode/bin` for opencode.
-        Duplicates collapse.
+        VENDOR chose: `~/.local/bin` for claude-code, codex and omp, `~/.opencode/bin` for
+        opencode. Duplicates collapse.
 
-        Turn it off only if the PATH is managed somewhere else. Note that opencode's installer
-        would otherwise append a PATH line to a shell rc file itself -- this module passes
-        `--no-modify-path` to stop it (see lib/agents.nix), so switching this off on a host that
-        selects opencode leaves the directory on no PATH at all.
+        Turn it off only if the PATH is managed somewhere else, and know what it costs: every one
+        of these installers wants to put its own directory on PATH by editing a shell rc file, and
+        this module stops all of them. opencode and omp take a flag (`--no-modify-path`,
+        `--binary`); codex takes neither and is stopped instead by lib/install-upstream.sh
+        prepending the install directory to the installer's own PATH, which is only TRUE while
+        this option is on. Switching it off leaves those directories on no PATH at all -- the
+        binaries install correctly and no command appears.
       '';
     };
 

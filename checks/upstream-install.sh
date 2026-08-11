@@ -203,6 +203,24 @@ printf '#!%s\necho "tool 1.2.3"\n' "$TEST_SH" >"$HOME/.local/bin/tool"
 chmod +x "$HOME/.local/bin/tool"
 PAYLOAD
 
+# The two things the installer's ENVIRONMENT must carry, recorded from inside it rather than
+# asserted about the call that made it. Modelled on codex's installer, which is the reason both
+# exist: it gates every interactive prompt on an environment variable, and it edits a shell rc file
+# unless its own destination is already on PATH.
+cat >"$WORK/payloads/records-env.sh" <<'PAYLOAD'
+#!/bin/sh
+printf 'flag:%s\n' "${TESTTOOL_NON_INTERACTIVE:-unset}" >"$HOME/env.txt"
+printf 'spaced:%s\n' "${TESTTOOL_GREETING:-unset}" >>"$HOME/env.txt"
+# The same early-return every one of these installers uses to decide whether to touch a shell rc.
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) printf 'ownprefix:yes\n' >>"$HOME/env.txt" ;;
+  *) printf 'ownprefix:no\n' >>"$HOME/env.txt"; echo 'export PATH=...' >>"$HOME/.bashrc" ;;
+esac
+mkdir -p "$HOME/.local/bin"
+printf '#!%s\necho "tool 1.2.3"\n' "$TEST_SH" >"$HOME/.local/bin/tool"
+chmod +x "$HOME/.local/bin/tool"
+PAYLOAD
+
 # Exits 0 having done nothing at all -- the failure these hosts have been bitten by.
 cat >"$WORK/payloads/noop.sh" <<'PAYLOAD'
 #!/bin/sh
@@ -346,6 +364,34 @@ expect_contains stderr "already resolves to"
 expect_contains stderr "$WORK/fakebin/tool"
 expect_file "$HOME/.local/bin/tool"
 rm -f "$WORK/fakebin/tool"
+
+# ── 12. --env reaches the installer, and its own prefix is on the installer's PATH ───────────
+# Both properties are read out of the installer's environment by the installer itself, because
+# that is the only place they matter. The rc-file assertion is the load-bearing half: codex has no
+# --no-modify-path, so the PATH prepend is the ONLY thing standing between a vendor script and a
+# file home-manager generates.
+new_case env-and-own-prefix-reach-the-installer
+export FAKE_PAYLOAD="$WORK/payloads/records-env.sh"
+run_install --env TESTTOOL_NON_INTERACTIVE=1 --env "TESTTOOL_GREETING=hello world"
+expect_status 0 "$status"
+expect_contains home/env.txt "flag:1"
+expect_contains home/env.txt "spaced:hello world"
+expect_contains home/env.txt "ownprefix:yes"
+expect_no_file "$HOME/.bashrc"
+
+# ── 13. a malformed --env is a bug here, not a network condition ─────────────────────────────
+# Unvalidated, `env` would take a bare word as a COMMAND to run and report "No such file or
+# directory" -- a diagnostic pointing at the vendor's installer, which was never reached.
+new_case malformed-env-is-a-hard-error
+status=0
+nixagent_install_upstream \
+  --name testtool --command tool --probe .local/bin/tool \
+  --url https://example.invalid/install.sh --runner bash \
+  --env NOT_AN_ASSIGNMENT --on-failure warn \
+  >"$CASEDIR/stdout" 2>"$CASEDIR/stderr" || status=$?
+expect_status 2 "$status"
+expect_contains stderr "expects NAME=VALUE"
+expect_curl_calls 0
 
 printf '\n%s check(s), %s failure(s)\n' "$checks" "$failures"
 if [ "$failures" -ne 0 ]; then

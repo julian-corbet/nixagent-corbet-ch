@@ -210,6 +210,30 @@ let
           && lib.isString t.upstream.installs)
         withUpstream;
 
+    # The loader preflight is gated on this and nothing else, so a missing field would read as
+    # `null` -> falsy -> "needs no loader", silently disarming the preflight for an entry that does.
+    # Asserted as a real bool rather than merely present, for the same reason.
+    "every non-null `upstream` states its loader requirement as a bool -- an absent field would silently disarm the preflight" =
+      lib.all (t: t.upstream ? needsDynamicLoader && lib.isBool t.upstream.needsDynamicLoader)
+        withUpstream;
+
+    # Renamed from `nativeBinary` on 2026-08-11 because codex is a static-PIE musl binary that
+    # needs no loader: the field is about the REQUIREMENT, not the artifact. Pinned so a revert to
+    # the old name -- which would evaluate to null and disarm the check above -- cannot land quietly.
+    "no entry carries the retired `nativeBinary` name, which named the artifact rather than the host requirement" =
+      lib.all (t: t.upstream == null || !(t.upstream ? nativeBinary)) allEntries;
+
+    # `env` reaches `env NAME=VALUE` in a shell. A non-string value, or a name that is not a legal
+    # identifier, becomes a command to execute rather than an assignment.
+    "every `upstream.env` is a string->string attrset with identifier-shaped names" =
+      lib.all
+        (t:
+          let e = t.upstream.env or { }; in
+          lib.isAttrs e
+          && lib.all (n: lib.isString e.${n} && builtins.match "[A-Za-z_][A-Za-z0-9_]*" n != null)
+            (lib.attrNames e))
+        withUpstream;
+
     # `installs` is joined onto $HOME by lib/install-upstream.sh. An absolute path or a `$HOME`
     # of its own would produce `/home/x//home/x/...` or an unexpanded literal, and the probe would
     # then never match -- which reads as "reinstalls on every activation", the exact regression
@@ -234,15 +258,33 @@ let
     "catalogue keys are unique across ALL groups -- the home-manager plane flattens them into one selection space" =
       lib.length allKeys == lib.length (lib.unique allKeys);
 
-    # The three entries that carry `upstream = null` each record what was checked (npm-only
-    # distribution, a 404/403 on the plausible installer URL, or a third-party repackaging with no
-    # vendor installer to run). Pinned so that "add an installer URL" stays a deliberate edit with
-    # a measurement behind it rather than something a refactor can invent.
-    "exactly the researched entries carry a vendor installer -- claude-code, opencode and omp; gemini-cli, openai-codex and claude-cowork-linux carry a recorded null" =
+    # The entries that carry `upstream = null` each record what was checked (npm/Node-only
+    # distribution with no Linux release artifact, or a third-party repackaging with no vendor
+    # installer to run). Pinned so that "add an installer URL" stays a deliberate edit with a
+    # measurement behind it rather than something a refactor can invent.
+    #
+    # This list GREW on 2026-08-11 and the assertion is here to make that visible when it happens:
+    # openai-codex moved out of the null set because the 403 it was recorded on came from a URL the
+    # vendor never used. Updating this line is the moment to write down what was actually probed.
+    "exactly the researched entries carry a vendor installer -- claude-code, openai-codex, opencode and omp; gemini-cli and claude-cowork-linux carry a recorded null" =
       sorted
         (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
           (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))
-      == [ "claude-code" "omp" "opencode" ];
+      == [ "claude-code" "omp" "openai-codex" "opencode" ];
+
+    # codex is the ONLY entry whose interactive prompt is suppressed by an environment variable
+    # instead of a flag, and losing it turns a `home-manager switch` typed at a terminal into a
+    # blocked activation waiting on "Start Codex now? [y/N]". Pinned at the value the vendor's own
+    # updater uses, not at "some truthy string".
+    "codex carries the non-interactive env var its own installer gates every prompt on" =
+      cat.cli.openai-codex.upstream.env == { CODEX_NON_INTERACTIVE = "1"; };
+
+    # The measured fact behind `needsDynamicLoader = false`, pinned separately from the field-shape
+    # assertion above: codex ships musl-static, so flagging it would demand nix-ld on hosts that
+    # can run it bare. If a future release starts shipping a glibc build this must flip WITH it.
+    "codex is the one installer that needs no dynamic loader -- static-PIE musl, no INTERP segment" =
+      cat.cli.openai-codex.upstream.needsDynamicLoader == false
+      && lib.all (n: cat.cli.${n}.upstream.needsDynamicLoader == true) [ "claude-code" "opencode" "omp" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

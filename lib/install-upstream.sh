@@ -53,8 +53,11 @@
 #   --probe REL              installed launcher, RELATIVE TO $HOME -- see the note below
 #   --url URL                the vendor's installer
 #   --runner bash|sh         interpreter to run it with
-#   [--native-binary]        what the installer lands is a native executable, so the host needs a
-#                            dynamic loader for it -- preflighted before anything is downloaded
+#   [--needs-dynamic-loader] what the installer lands requires /lib64/ld-linux-x86-64.so.2 --
+#                            preflighted before anything is downloaded. NOT "is it a native
+#                            binary": codex's artifact is a static-PIE musl executable with no
+#                            INTERP segment and needs no loader at all. See lib/agents.nix.
+#   [--env NAME=VALUE]       exported for the installer run only; repeatable
 #   [--on-failure abort|warn]  default abort
 #   [--connect-timeout N]      default 10  (seconds)
 #   [--max-time N]             default 600 (seconds)
@@ -70,8 +73,9 @@
 # this repo, not a network condition, and hiding it behind a warning would hide the bug.
 nixagent_install_upstream() {
   local name="" command_name="" probe_rel="" url="" runner=""
-  local on_failure="abort" connect_timeout="10" max_time="600" native_binary=""
+  local on_failure="abort" connect_timeout="10" max_time="600" needs_loader=""
   local -a installer_args=()
+  local -a installer_env=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -80,9 +84,28 @@ nixagent_install_upstream() {
         installer_args=("$@")
         break
         ;;
-      --native-binary)
-        native_binary=1
+      --needs-dynamic-loader)
+        needs_loader=1
         shift
+        continue
+        ;;
+      --env)
+        if [ "$#" -lt 2 ]; then
+          printf 'nixagent: internal error: --env requires a value\n' >&2
+          return 2
+        fi
+        # NAME=VALUE, validated here rather than trusted. A bare `--env FOO` would otherwise reach
+        # `env` as a COMMAND to execute rather than an assignment, which fails as "FOO: No such
+        # file or directory" from inside an install and reads like a broken installer.
+        case "$2" in
+          [A-Za-z_]*=*) ;;
+          *)
+            printf 'nixagent: internal error: --env expects NAME=VALUE, got %s\n' "$2" >&2
+            return 2
+            ;;
+        esac
+        installer_env+=("$2")
+        shift 2
         continue
         ;;
       --name | --command | --probe | --url | --runner | --on-failure | --connect-timeout | --max-time)
@@ -199,20 +222,34 @@ nixagent_install_upstream() {
       break
     fi
 
+    # `env`, third and separately, because the installer is invoked THROUGH it (see the PATH-prepend
+    # block below). Without this the missing-coreutils case would surface as "the installer exited
+    # 127" -- a diagnostic pointing at the vendor's script, which ran fine and was never reached.
+    if ! command -v env >/dev/null 2>&1; then
+      stage="preflight"
+      detail="coreutils' 'env' is not on PATH, and the installer is invoked through it. This is not a network fault -- see nixagent.home.extraPath"
+      break
+    fi
+
     # ── THE DYNAMIC LOADER ──────────────────────────────────────────────────────────────────
     #
-    # Only for entries flagged `--native-binary`. Gating it matters in both directions: a host with
-    # no loader runs a SHELL-script installer perfectly well, so testing unconditionally would
-    # refuse installs that would have succeeded. (Found the honest way -- the check harness in
+    # Only for entries flagged `--needs-dynamic-loader`. Gating it matters in both directions: a
+    # host with no loader runs a SHELL-script installer perfectly well, so testing unconditionally
+    # would refuse installs that would have succeeded. (Found the honest way -- the check harness in
     # ../checks/upstream-install.nix drives fake shell installers inside a nix sandbox, which has
     # no FHS, and an unconditional test failed 25 of its 48 cases.)
     #
-    # Every installer in the catalogue delivers a NATIVE x86-64 glibc executable, not a script and
-    # not a JS bundle -- verified by range-fetching the actual release artifacts, both of which
-    # report `INTERP /lib64/ld-linux-x86-64.so.2`. A distribution that does not provide that path
-    # cannot run any of them, and the failure surfaces as ENOENT on the LOADER, which the shell
-    # reports as "no such file or directory" naming a binary that plainly exists -- one of the
-    # least legible errors in Unix, and worth spending a preflight to never see.
+    # THE FLAG IS ABOUT THE REQUIREMENT, NOT ABOUT THE ARTIFACT, and the distinction is not
+    # academic: three of the four catalogued installers deliver an x86-64 GLIBC executable
+    # reporting `INTERP /lib64/ld-linux-x86-64.so.2` (verified by range-fetching the release
+    # artifacts), while codex delivers the largest native binary of the lot as a static-PIE musl
+    # build with no INTERP segment at all -- it starts fine on a host with no FHS and no nix-ld.
+    # Flagging it by "is it native" would have imposed a prerequisite it does not have.
+    #
+    # For the three that do need it: a distribution that does not provide that path cannot run
+    # them, and the failure surfaces as ENOENT on the LOADER, which the shell reports as "no such
+    # file or directory" naming a binary that plainly exists -- one of the least legible errors in
+    # Unix, and worth spending a preflight to never see.
     #
     # NixOS is the case this is written for: it has no FHS, so the path is absent unless
     # `programs.nix-ld.enable` is set. Checking existence alone is NOT enough. Merely having nix-ld
@@ -226,12 +263,12 @@ nixagent_install_upstream() {
     # is left alone -- this preflight's job is to catch hosts that provably cannot run the artifact,
     # not to audit hosts that probably can.
     #
-    if [ -n "$native_binary" ] && [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
+    if [ -n "$needs_loader" ] && [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
       stage="preflight"
       detail="this host has no /lib64/ld-linux-x86-64.so.2, and the installer delivers a native glibc binary that cannot start without it. On NixOS set programs.nix-ld.enable = true (with programs.nix-ld.libraries populated), or deliver this tool through a distro plane instead"
       break
     fi
-    if [ -n "$native_binary" ] && [ -z "${NIX_LD:-}" ] && case "$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)" in *stub-ld*) true ;; *) false ;; esac; then
+    if [ -n "$needs_loader" ] && [ -z "${NIX_LD:-}" ] && case "$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)" in *stub-ld*) true ;; *) false ;; esac; then
       stage="preflight"
       detail="/lib64/ld-linux-x86-64.so.2 is nix-ld's stub and NIX_LD is unset, so the stub will refuse to load anything. programs.nix-ld.enable is on but nothing is behind it -- populate programs.nix-ld.libraries, and make sure NIX_LD reaches this activation's environment"
       break
@@ -280,9 +317,28 @@ nixagent_install_upstream() {
         ;;
     esac
 
-    # `${arr[@]+...}` so an empty argument array is not an unbound-variable error under `set -u`.
+    # ── THE INSTALLER'S OWN PREFIX GOES ON ITS PATH ─────────────────────────────────────────
+    #
+    # Every one of these installers checks whether its destination is on `$PATH` and, if it is not,
+    # EDITS A SHELL RC FILE to put it there. Two of them can be told not to (`--no-modify-path`,
+    # `--binary`); codex cannot -- its `add_to_path` returns early only when `$BIN_DIR` is already
+    # in `$PATH`, and otherwise writes a marker block into ~/.bashrc, ~/.zshrc or ~/.profile
+    # depending on `$SHELL`. There is no flag and no environment variable to suppress it.
+    #
+    # An activation inherits no login PATH (see the preflight above), so the destination is never
+    # on it and the edit always fires -- into a file home-manager may well generate, on a plane
+    # whose entire claim is that it does not touch anything nix owns. Telling the installer the
+    # truth is both the fix and the honest thing to say: the directory IS on the user's PATH,
+    # because `nixagent.home.addToPath` put it there through `home.sessionPath`.
+    #
+    # Scoped to this one command rather than exported: nothing after it needs the change, and the
+    # loader/curl preflights above deliberately ran against the unmodified PATH.
+    #
+    # `${arr[@]+...}` so an empty array is not an unbound-variable error under `set -u`.
     rc=0
-    "$runner" "$tmpdir/installer" ${installer_args[@]+"${installer_args[@]}"} >"$log" 2>&1 || rc=$?
+    env "PATH=$(dirname "$probe")${PATH:+:$PATH}" \
+      ${installer_env[@]+"${installer_env[@]}"} \
+      "$runner" "$tmpdir/installer" ${installer_args[@]+"${installer_args[@]}"} >"$log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
       stage="install"
       detail="the installer exited $rc"

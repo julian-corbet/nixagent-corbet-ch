@@ -29,14 +29,14 @@ tools at all — *given the host requirement below* — and how any host gets on
 has fallen behind.
 
 ```nix
-nixagent.home.upstream = [ "claude-code" "omp" ];   # claude-code | omp | opencode
+nixagent.home.upstream = [ "claude-code" "omp" ];   # claude-code | omp | openai-codex | opencode
 ```
 
 That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
 family. The planes are independent and chosen **per host** — pacman/AUR on the Arch boxes, upstream
 on NixOS, or upstream everywhere. Neither is forced and neither is the fallback.
 
-## The rule this repo exists for: never nixpkgs
+## The rule this repo exists for: never nixpkgs — and the reason is not freshness
 
 These tools **ship their own updater** and release on a cadence measured in days. A nix-store path
 is read-only, so the updater cannot run at all — the version freezes until a human bumps a
@@ -44,25 +44,32 @@ is read-only, so the updater cannot run at all — the version freezes until a h
 structurally unable to. A distro package is mutable enough that the system's own upgrade *is* the
 updater, which is the outcome you want.
 
-nixpkgs also lags them, and that half is measured rather than asserted. Force-evaluated against a
-pinned revision on 2026-08-07:
+**That is the whole argument, and it is the only load-bearing one.** Freshness is a symptom of it,
+not a second reason — and treating it as one has already gone wrong here once. Re-measured
+2026-08-11 against nixpkgs-unstable HEAD, each project's release feed, and the Arch package API:
 
-| Catalogue entry | nixpkgs | pacman |
-|---|---|---|
-| `claude-code` | `pkgs.claude-code` 2.1.220 | 2.1.222-1 |
-| `gemini-cli` | `pkgs.gemini-cli` 0.47.0 | 0.50.0-1 |
-| `openai-codex` | `pkgs.codex` 0.146.0 | 0.146.1-1 |
-| `opencode` | `pkgs.opencode` 1.18.11 | 1.18.14-1 |
+| Catalogue entry | nixpkgs-unstable | Arch / AUR | upstream |
+|---|---|---|---|
+| `claude-code` | 2.1.226 | 2.1.222 (`cachyos`) | 2.1.226 |
+| `opencode` | 1.18.13 | 1.18.16 (`extra`) | 1.18.16 |
+| `openai-codex` | 0.147.0 | 0.146.1 (`extra`) | 0.147.0 |
+| `gemini-cli` | 0.47.0 | 1:0.50.0 (`extra`) | 0.54.4 |
+| `omp` | *absent* | 17.2.2 (AUR, flagged out of date) | 17.2.12 |
 
-So availability is not the reason — nixpkgs carries all four. The reason is that a nixpkgs
-derivation pins and hashes a release, which is precisely the property this class of tool is built
-to defeat.
+Read that honestly: nixpkgs is **ahead** of Arch for two of the five and level for a third. An
+earlier revision of this README claimed every entry was behind its distro package. That was true of
+the snapshot it was taken from and is false now — which is exactly why the rule does not rest on it.
+Freshness changes hands week to week; immutability does not.
 
-(`omp`, added later, is the one entry nixpkgs genuinely does *not* carry — neither `omp` nor
-`oh-my-pi` exists there, force-evaluated 2026-08-10. What does exist is `pkgs.pi-coding-agent`
-0.83.0, homepage `pi.dev`, main program `pi`: Mario Zechner's pi-mono, the project omp forked
-*from*. Reaching for it because the npm name is `@oh-my-pi/pi-coding-agent` installs a different
-agent under a different command.)
+The one row that *is* catastrophic is `gemini-cli`, and it is not a packaging lag: nixpkgs marked
+the package with a `meta.problems.removal` note on 2026-08-07 recording that Google is replacing
+Gemini CLI with Antigravity CLI. A package being wound down is not evidence about nixpkgs' cadence.
+
+(`omp` is the one entry nixpkgs genuinely does *not* carry — neither `omp` nor `oh-my-pi` exists
+there, force-evaluated 2026-08-10. What does exist is `pkgs.pi-coding-agent` 0.83.0, homepage
+`pi.dev`, main program `pi`: Mario Zechner's pi-mono, the project omp forked *from*. Reaching for it
+because the npm name is `@oh-my-pi/pi-coding-agent` installs a different agent under a different
+command.)
 
 The catalogue therefore carries **`nixpkgs = null` on every entry**, present rather than omitted so
 that nobody mistakes the policy for an oversight, and `checks/agents-eval.nix` asserts it — an
@@ -71,21 +78,21 @@ output**: not a gap to fill later, but the boundary the repo was drawn for. A Ni
 these tools uses the upstream plane below, which installs the vendor's own build and leaves its
 updater working.
 
+### What "never nixpkgs" does *not* mean
+
+The prohibition is on nix owning the **tool**. It says nothing about nix supplying that tool's
+**runtime** or its installer's dependencies. `programs.nix-ld` providing a dynamic loader, and
+`nixagent.home.extraPath` handing the vendor's script a nixpkgs `curl` and `bash`, are not
+exceptions to the rule — they are the rule working. Nix builds the ground the vendor's artifact
+stands on; the artifact stays the vendor's, mutable, and updatable by its own updater.
+
 ## The second delivery mode, and the measurement that forced it
 
 The argument above is about nixpkgs and it holds. What it does *not* establish is that a distro
-package is always current — and for a fast-moving tool it measurably is not. Checked 2026-08-10
-against the AUR RPC and each project's own release feed:
-
-| Tool | Upstream | Distro package |
-|---|---|---|
-| `omp` | **17.2.12** (2026-08-09) | AUR `oh-my-pi-bin` 17.2.2-1, **flagged out of date 8 Aug**<br>AUR `oh-my-pi` 17.2.3-1, **flagged out of date 4 Aug** |
-| `claude-code` | 2.1.226 | AUR 2.1.220-1, **flagged out of date 4 Aug**; `cachyos` repo 2.1.222-1 |
-| `opencode` | 1.18.16 (2026-08-10) | Arch `extra` 1.18.15-1 |
-| `gemini-cli` | 0.54.4 | Arch `extra` 1:0.50.0-1 |
-
-Ten patch releases behind, with an `omp-updater` bot listed as co-maintainer on *both* AUR
-packages. A packager — even an automated one — is a human in the loop of a project that ships
+package is always current — and the same table shows it measurably is not. `omp` is ten patch
+releases behind upstream in the AUR, with an `omp-updater` bot listed as co-maintainer on *both*
+packages and both flagged out of date; `opencode` and `gemini-cli` trail their own releases in
+Arch `extra`. A packager — even an automated one — is a human in the loop of a project that ships
 several times a week, and for a fast enough project the AUR pins as badly as nixpkgs would.
 
 So there is a second plane, and its contract is one sentence:
@@ -112,8 +119,8 @@ exactly where it was. Full write-up:
 
 ### Host requirement: a dynamic loader for foreign binaries
 
-Every catalogued installer delivers a **native x86-64 glibc executable** — not a script, not a JS
-bundle. Both artifacts declare `INTERP /lib64/ld-linux-x86-64.so.2`, a path NixOS does not have.
+Three of the four catalogued installers deliver an **x86-64 glibc executable** declaring
+`INTERP /lib64/ld-linux-x86-64.so.2`, a path NixOS does not have.
 
 So on NixOS the upstream plane needs `programs.nix-ld`, and needs it *configured*, not merely
 enabled — a host with nix-ld in the closure but nothing behind it installs a **stub** at that path
@@ -129,6 +136,13 @@ programs.nix-ld.libraries = with pkgs; [ stdenv.cc.cc.lib zlib openssl ];
 Claude's installer cannot route around this by picking its musl build: its libc detection is
 `[ -f /lib/libc.musl-*.so.1 ] || ldd /bin/ls | grep -q musl`, and NixOS has no `/bin/ls`, so it
 selects the glibc artifact on exactly the hosts that cannot run it.
+
+**It is per entry, and `openai-codex` is why.** The catalogue field is `needsDynamicLoader` — named
+after the host requirement, not after the artifact, because codex ships the *largest* native binary
+here (a 258 MB Rust executable) and needs no loader at all: every Linux asset is
+`x86_64-unknown-linux-musl`, and its program headers carry no `INTERP` segment, so it is a static
+PIE that starts on a bare NixOS host. Flagging it by "is this a native binary" would have imposed a
+prerequisite it does not have and refused installs that would have worked.
 
 ### How idempotency and failure work
 
@@ -211,8 +225,8 @@ wrapper or a home-manager config at the *package* name gets you a command that d
 | Selection (catalogue key) | pacman package | command | vendor installer |
 |---|---|---|---|
 | `claude-code` | `claude-code` | `claude` | `claude.ai/install.sh` → `~/.local/bin/claude` |
-| `gemini-cli` | `gemini-cli` | `gemini` | — (npm/brew only; the two plausible URLs 404) |
-| `openai-codex` | `openai-codex` | `codex` | — (npm/brew only; `openai.com/codex/install.sh` 403) |
+| `gemini-cli` | `gemini-cli` | `gemini` | — (npm/Node only; no installer, and no Linux release asset in any of the last 15 releases) |
+| `openai-codex` | `openai-codex` | `codex` | `chatgpt.com/codex/install.sh` → `~/.local/bin/codex` |
 | `opencode` | `opencode` | `opencode` | `opencode.ai/install` → `~/.opencode/bin/opencode` |
 | `omp` | `oh-my-pi-bin` | `omp` | `omp.sh/install` → `~/.local/bin/omp` |
 | `claude-cowork-linux` | `claude-cowork-linux` | `claude-cowork` | — (third-party repackaging) |
@@ -227,6 +241,13 @@ suffix means nothing.
 and why npm was not accepted as a substitute. `nixagent.home.upstream` is typed to the entries that
 have an installer, so naming one that does not is an eval error rather than an activation that
 quietly fetches nothing.
+
+**A finding is not a verdict — re-probe it.** `openai-codex` carried `upstream = null` from
+2026-08-07 to 2026-08-11 on a recorded *403 from `openai.com/codex/install.sh`*. That URL is not
+OpenAI's and never served the installer; the real one is in the project README and answers 200. A
+403 is a fact about a URL, and reading it as a fact about a tool kept codex off every NixOS host
+here for four days. When an entry blocks a host, check the vendor's own documented command before
+concluding the vendor ships nothing.
 
 ## What this does not own
 
@@ -294,18 +315,22 @@ between the lists with `nixagent.distro` and is never on both; and `claude-cowor
 to, and asserts what it renders: one activation entry rather than one per tool, after
 `writeBoundary`; every call prefixed with home-manager's dry-run hook, so `home-manager build` can
 never install anything; the probe path and command taken from the catalogue rather than the key or
-the package name; `--binary` and `--no-modify-path` present where they are load-bearing; each
-vendor's own prefix on `home.sessionPath`, deduplicated; a selection with no vendor installer
-refused at eval time; and — mechanising the contract — **no `home.packages`, no `home.file`, no
-version, hash or store path anywhere in the rendered script**.
+the package name; `--binary` and `--no-modify-path` present where they are load-bearing; codex's
+`--env 'CODEX_NON_INTERACTIVE=1'` rendered as one quoted word and on no other entry; the loader
+flag emitted per entry and **absent** on codex; each vendor's own prefix on `home.sessionPath`,
+deduplicated; a selection with no vendor installer refused at eval time while `openai-codex` is
+accepted; and — mechanising the contract — **no `home.packages`, no `home.file`, no version, hash
+or store path anywhere in the rendered script**.
 
 **`upstream-install`** shellchecks `lib/install-upstream.sh` and then *runs* it against a stubbed
-`curl` through eleven cases, including: it installs when the tool is absent; on a second activation
-it invokes curl **zero** times *with the network stubbed to fail*, so even an attempt would be
-fatal; a 404 and an HTML error page and a non-zero installer each produce a labelled diagnostic
-carrying the installer's own output; an installer that exits 0 having installed nothing **fails**;
-a binary that installs but cannot start fails; `warn` mode does not abort but still prints; and a
-malformed call is never downgraded by `warn`.
+`curl` through thirteen cases, including: it installs when the tool is absent; on a second
+activation it invokes curl **zero** times *with the network stubbed to fail*, so even an attempt
+would be fatal; a 404 and an HTML error page and a non-zero installer each produce a labelled
+diagnostic carrying the installer's own output; an installer that exits 0 having installed nothing
+**fails**; a binary that installs but cannot start fails; `--env` values reach the installer's
+environment intact (spaces included) while a malformed one is a hard error that fetches nothing;
+the installer sees its own destination on `PATH` and therefore writes no shell rc file; `warn` mode
+does not abort but still prints; and a malformed call is never downgraded by `warn`.
 
 Every assertion in all three was confirmed to actually fail when the thing it guards is broken.
 For the behaviour suite that was done by mutation: removing the idempotency gate, the
