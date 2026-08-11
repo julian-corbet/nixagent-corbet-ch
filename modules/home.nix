@@ -109,6 +109,10 @@ let
     ++ lib.concatMap (n: [ "--env" (shq "${n}=${t.upstream.env.${n}}") ])
       (lib.attrNames (t.upstream.env or { }))
 
+    # `--needs CMD`, one per entry-declared hard requirement, preflighted by name before anything
+    # is fetched. Empty for every entry but codex, whose installer parses release metadata with awk.
+    ++ lib.concatMap (c: [ "--needs" (shq c) ]) (t.upstream.needs or [ ])
+
     ++ lib.optionals (t.upstream.args != [ ]) ([ "--" ] ++ map shq t.upstream.args)
   );
 

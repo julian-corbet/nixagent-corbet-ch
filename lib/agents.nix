@@ -164,6 +164,27 @@
 #                           Exists for `openai-codex`, whose installer has exactly two flags
 #                           (`--release`, `--help`) and gates every prompt on `CODEX_NON_INTERACTIVE`
 #                           -- and whose OWN self-updater sets that variable when re-running it.
+#                 needs     (default [ ]) commands the installer requires BEYOND the universal
+#                           floor (curl, the runner, env), preflighted by name before anything is
+#                           fetched. Not a dependency list for a package manager -- this repo
+#                           installs nothing -- but the names a consumer's `nixagent.home.extraPath`
+#                           has to satisfy on a host with no FHS.
+#
+#                           IT EXISTS BECAUSE THE FAILURE WITHOUT IT LIES. codex parses release
+#                           metadata with a hand-written JSON tokeniser in awk, for both its CDN
+#                           path and its GitHub fallback. With no awk on an activation's PATH both
+#                           fail in turn and the install dies reporting "Could not parse
+#                           releases.openai.com release metadata for Codex latest", plus a broken
+#                           pipe from the `fold` feeding it. That names OpenAI's CDN for what is a
+#                           missing coreutils-adjacent binary, and sends a reader to the network.
+#                           Exactly the class of misdirection the curl and runner preflights above
+#                           already exist to prevent; this generalises them per entry.
+#
+#                           ONLY HARD REQUIREMENTS BELONG HERE. A tool the installer guards with
+#                           `command -v` and has a fallback for is NOT a need -- codex probes
+#                           shasum/openssl/flock/wget that way and works without every one of them.
+#                           Listing those would make a host install packages to satisfy a preflight
+#                           for code paths it never takes.
 #                 installs  the launcher the installer creates, RELATIVE TO $HOME. This is the
 #                           idempotency probe (present -> nothing is fetched), the post-install
 #                           verification target, and the directory added to PATH. Its basename is
@@ -388,6 +409,18 @@
         runner = "sh";
         args = [ ];
         env = { CODEX_NON_INTERACTIVE = "1"; };
+
+        # Measured on the first real switch that selected this entry (2026-08-11), not predicted:
+        # the install failed with "Could not parse releases.openai.com release metadata for Codex
+        # latest" on a host whose PATH had curl, bash, coreutils, tar, gzip, unzip, grep and sed --
+        # everything the other three installers need, and no awk. `parse_release_metadata` is
+        # `LC_ALL=C fold -b -w 4096 | LC_ALL=C awk '<a JSON tokeniser>'`, and the GitHub fallback
+        # parses the same way, so both sources "fail" identically and the diagnostic names the CDN.
+        #
+        # awk ONLY. sha256sum comes from coreutils and is codex's first choice; shasum, openssl,
+        # flock, lockf and wget are all `command -v`-guarded with working fallbacks.
+        needs = [ "awk" ];
+
         installs = ".local/bin/codex";
 
         # FALSE, and it is the entry that made the field's name a bug worth fixing -- see the

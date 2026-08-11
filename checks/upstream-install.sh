@@ -379,7 +379,31 @@ expect_contains home/env.txt "spaced:hello world"
 expect_contains home/env.txt "ownprefix:yes"
 expect_no_file "$HOME/.bashrc"
 
-# ── 13. a malformed --env is a bug here, not a network condition ─────────────────────────────
+# ── 13. a declared --needs that is absent is caught BEFORE the fetch, and named ──────────────
+# The case this whole field exists for. Without it codex's own installer runs, its awk pipeline
+# collapses, and the diagnostic blames OpenAI's CDN. `expect_curl_calls 0` is the load-bearing
+# half: the point is not just a better message, it is not downloading at all.
+new_case declared-need-missing-fails-preflight
+export FAKE_PAYLOAD="$WORK/payloads/good.sh"
+run_install --needs definitely-not-a-real-command
+expect_status 1 "$status"
+expect_contains stderr "stage:     preflight"
+expect_contains stderr "definitely-not-a-real-command"
+expect_contains stderr "not a network fault"
+expect_curl_calls 0
+expect_no_file "$HOME/.local/bin/tool"
+
+# ── 14. a declared --needs that IS present does not get in the way ───────────────────────────
+# The other direction, and not a formality: three of the four catalogue entries declare nothing,
+# so the empty and satisfied paths are the ones that run on every host, every switch.
+new_case declared-need-present-installs-normally
+export FAKE_PAYLOAD="$WORK/payloads/good.sh"
+run_install --needs bash --needs curl
+expect_status 0 "$status"
+expect_curl_calls 1
+expect_file "$HOME/.local/bin/tool"
+
+# ── 15. a malformed --env is a bug here, not a network condition ─────────────────────────────
 # Unvalidated, `env` would take a bare word as a COMMAND to run and report "No such file or
 # directory" -- a diagnostic pointing at the vendor's installer, which was never reached.
 new_case malformed-env-is-a-hard-error

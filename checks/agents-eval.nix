@@ -234,6 +234,25 @@ let
             (lib.attrNames e))
         withUpstream;
 
+    # `needs` names COMMANDS for `command -v`, not packages and not paths. A path here would make
+    # the preflight test something a consumer's extraPath can never satisfy.
+    "every `upstream.needs` is a list of bare command names -- not packages, not paths" =
+      lib.all
+        (t:
+          let n = t.upstream.needs or [ ]; in
+          lib.isList n
+          && lib.all (c: lib.isString c && builtins.match "[a-zA-Z0-9_.+-]+" c != null) n)
+        withUpstream;
+
+    # Measured on a real switch rather than predicted: codex's release-metadata parser is awk, for
+    # both its CDN path and its GitHub fallback, so a host without it fails naming OpenAI's CDN.
+    # Pinned to awk ALONE -- shasum/openssl/flock/wget are `command -v`-guarded with fallbacks, and
+    # listing them would make a consumer install packages for code paths never taken.
+    "codex declares awk and nothing else; no other entry declares a need" =
+      cat.cli.openai-codex.upstream.needs == [ "awk" ]
+      && lib.all (t: (t.upstream.needs or [ ]) == [ ])
+        (lib.filter (t: t.upstream != null && t.binary != "codex") allEntries);
+
     # `installs` is joined onto $HOME by lib/install-upstream.sh. An absolute path or a `$HOME`
     # of its own would produce `/home/x//home/x/...` or an unexpanded literal, and the probe would
     # then never match -- which reads as "reinstalls on every activation", the exact regression

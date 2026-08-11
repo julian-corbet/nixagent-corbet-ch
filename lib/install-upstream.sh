@@ -58,6 +58,8 @@
 #                            binary": codex's artifact is a static-PIE musl executable with no
 #                            INTERP segment and needs no loader at all. See lib/agents.nix.
 #   [--env NAME=VALUE]       exported for the installer run only; repeatable
+#   [--needs CMD]            a command this installer hard-requires, preflighted by name;
+#                            repeatable. See lib/agents.nix's `needs` field for why.
 #   [--on-failure abort|warn]  default abort
 #   [--connect-timeout N]      default 10  (seconds)
 #   [--max-time N]             default 600 (seconds)
@@ -76,6 +78,7 @@ nixagent_install_upstream() {
   local on_failure="abort" connect_timeout="10" max_time="600" needs_loader=""
   local -a installer_args=()
   local -a installer_env=()
+  local -a needs=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -87,6 +90,15 @@ nixagent_install_upstream() {
       --needs-dynamic-loader)
         needs_loader=1
         shift
+        continue
+        ;;
+      --needs)
+        if [ "$#" -lt 2 ]; then
+          printf 'nixagent: internal error: --needs requires a value\n' >&2
+          return 2
+        fi
+        needs+=("$2")
+        shift 2
         continue
         ;;
       --env)
@@ -228,6 +240,32 @@ nixagent_install_upstream() {
     if ! command -v env >/dev/null 2>&1; then
       stage="preflight"
       detail="coreutils' 'env' is not on PATH, and the installer is invoked through it. This is not a network fault -- see nixagent.home.extraPath"
+      break
+    fi
+
+    # ── THE PER-ENTRY TOOLS ─────────────────────────────────────────────────────────────────
+    #
+    # Same reasoning as the three above, one level down: those are what THIS function needs, these
+    # are what a particular VENDOR's script needs, named in its catalogue entry. Checked here for
+    # the same reason and with the same payoff -- a missing one otherwise surfaces as whatever the
+    # installer says when its own pipeline collapses, and what codex says is "Could not parse
+    # releases.openai.com release metadata", which blames a CDN for a missing awk.
+    #
+    # Reported one at a time and by name, with the entry that asked for it, because a list of
+    # everything wrong is less useful than the first thing to fix.
+    # `if [ -n ... ]` and not `[ -n ... ] && break`: home-manager's activation script runs under
+    # `set -e`, where an AND-list whose FIRST command fails is itself a failed top-level command
+    # and aborts the whole activation. That would turn "this entry needs nothing extra" -- the case
+    # for three of the four -- into a switch that dies with no message at all.
+    local need=""
+    for need in ${needs[@]+"${needs[@]}"}; do
+      if ! command -v "$need" >/dev/null 2>&1; then
+        stage="preflight"
+        detail="'$need' is not on PATH, and $name's installer requires it (lib/agents.nix records why on the entry). This is not a network fault and not a vendor outage -- see nixagent.home.extraPath"
+        break
+      fi
+    done
+    if [ -n "$stage" ]; then
       break
     fi
 

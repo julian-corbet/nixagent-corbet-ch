@@ -149,6 +149,16 @@ let
       lib.all (l: contains "--env 'CODEX_NON_INTERACTIVE=1'" l) (callLines codexOnly)
       && !(lib.any (l: contains "--env" l) (callLines allThree));
 
+    # Same call-lines-not-script trap as the env assertion above: the inlined library parses
+    # `--needs` itself, so a `contains` over the whole script matches the parser.
+    #
+    # AND the negative half must match `--needs '` INCLUDING the space and quote, because a bare
+    # `--needs` is an infix of `--needs-dynamic-loader` -- which all three of the others DO render.
+    # Written the loose way first, this assertion failed on exactly that and was right to.
+    "codex renders --needs 'awk', and no other entry renders a need" =
+      lib.all (l: contains "--needs 'awk'" l) (callLines codexOnly)
+      && !(lib.any (l: contains "--needs '" l) (callLines allThree));
+
     "codex renders the rest of its identity: sh runner, chatgpt.com installer, probe .local/bin/codex, command codex, and no flags" =
       contains "--url 'https://chatgpt.com/codex/install.sh' --runner 'sh'" (script codexOnly)
       && contains "--probe '.local/bin/codex'" (script codexOnly)
