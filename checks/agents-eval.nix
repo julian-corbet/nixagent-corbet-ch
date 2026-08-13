@@ -42,6 +42,8 @@ let
   cachyAll = evalWith { cli = allClients; desktop = allDesktop; distro = "cachyos"; };
 
   empty = evalWith { };
+  codexOnly = evalWith { cli = [ "openai-codex" ]; };
+  opencodeOnly = evalWith { cli = [ "opencode" ]; };
 
   has = list: item: lib.elem item list;
   sorted = lib.sort (a: b: a < b);
@@ -57,8 +59,11 @@ let
     "empty selection resolves to nothing selected" =
       empty.selected == [ ];
 
-    "empty selection produces empty package lists on BOTH sides, not one populated by default" =
-      empty.archPackages == [ ] && empty.aurPackages == [ ] && empty.binaries == { };
+    "empty selection produces empty package lists on BOTH sides and no runtime packages, not one populated by default" =
+      empty.archPackages == [ ]
+      && empty.aurPackages == [ ]
+      && empty.runtimeArchPackages == [ ]
+      && empty.binaries == { };
 
     # ── THE LOAD-BEARING INVARIANT ────────────────────────────────────────────────────────────
     # One AUR name reaching a pacman list aborts the entire pacman transaction ("target not
@@ -172,6 +177,17 @@ let
       && !(has archAll.archPackages "codex")
       && archAll.binaries.openai-codex == "codex";
 
+    # Codex's Linux sandbox uses the first `bwrap` on PATH. The bundled helper is only a fallback;
+    # the vendor documents the distribution package as the reliable prerequisite. Keep it separate
+    # from `archPackages`: one is the selected client, the other is ground that client runs on.
+    "selecting codex publishes bubblewrap as its Arch runtime prerequisite, exactly once" =
+      codexOnly.runtimeArchPackages == [ "bubblewrap" ]
+      && codexOnly.archPackages == [ "openai-codex" ]
+      && !(has codexOnly.archPackages "bubblewrap");
+
+    "bubblewrap is conditional on codex rather than a runtime default for every agent" =
+      opencodeOnly.runtimeArchPackages == [ ];
+
     "binaries covers exactly the selection, no more -- an unselected entry contributes no command" =
       let d = evalWith { cli = [ "opencode" ]; }; in
       d.binaries == { opencode = "opencode"; };
@@ -180,6 +196,24 @@ let
     "every catalogue entry names both a package and a command -- a missing `binary` would make `nixagent.binaries` silently wrong rather than absent" =
       lib.all (t: t ? arch && t ? binary && lib.isString t.arch && lib.isString t.binary)
         (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat));
+
+    "runtime package metadata is string lists on both supported Linux delivery planes" =
+      lib.all
+        (t:
+          let runtime = t.runtime or { archPackages = [ ]; nixpkgsPackages = [ ]; }; in
+          lib.isList runtime.archPackages
+          && lib.all lib.isString runtime.archPackages
+          && lib.isList runtime.nixpkgsPackages
+          && lib.all lib.isString runtime.nixpkgsPackages)
+        allEntries;
+
+    "codex alone declares bubblewrap on both Linux delivery planes" =
+      cat.cli.openai-codex.runtime == {
+        archPackages = [ "bubblewrap" ];
+        nixpkgsPackages = [ "bubblewrap" ];
+      }
+      && lib.all (t: !(t ? runtime))
+        (lib.filter (t: t.binary != "codex") allEntries);
 
     "`archRepoOn` only ever appears on an entry that is AUR-only upstream -- on an official-repo entry it would be a no-op that reads like a promise" =
       lib.all (t: !(t ? archRepoOn) || (t.aur or false))

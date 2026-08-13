@@ -34,6 +34,7 @@ let
   };
 
   evalWith = selection: (lib.evalModules {
+    specialArgs = { inherit pkgs; };
     modules = [ homeSurfaceStub ../modules/home.nix { nixagent.home = selection; } ];
   }).config;
 
@@ -73,12 +74,16 @@ let
       && empty.nixagent.home.paths == { }
       && empty.nixagent.home.prefixes == [ ];
 
-    # ── THE CONTRACT: NIX ENSURES IT EXISTS, NIX NEVER OWNS IT ────────────────────────────────
+    # ── THE CONTRACT: NIX ENSURES THE CLIENT EXISTS, NIX NEVER OWNS THE CLIENT ─────────────────
     # Mechanised, because it is the entire design and it is exactly the kind of thing a future
     # "wouldn't it be tidier to just add the package" edit would undo. If either of these ever
     # gains a member, this plane has started pinning what it promised never to pin.
-    "the module installs NOTHING through nix -- no home.packages, no home.file, on any selection" =
+    "non-codex selections install no nix package or managed binary" =
       allThree.home.packages == [ ] && allThree.home.file == { };
+
+    "codex installs only its bubblewrap runtime from nixpkgs, never the codex client itself" =
+      codexOnly.home.packages == [ pkgs.bubblewrap ]
+      && codexOnly.home.file == { };
 
     "no version, hash or store path is baked into the rendered script -- the vendor's installer decides the version, every time" =
       !(contains "sha256" (script allThree))

@@ -371,6 +371,21 @@
       binary = "codex";
       nixpkgs = null;
 
+      # Codex's Linux sandbox uses the first `bwrap` executable on PATH. If none exists it falls
+      # back to a bundled helper, but that helper depends on unprivileged user namespaces and the
+      # client emits a startup warning. OpenAI's sandbox prerequisites explicitly recommend the
+      # distribution package for a reliable setup:
+      # https://developers.openai.com/codex/concepts/sandboxing#prerequisites
+      #
+      # This is runtime ground, not the agent binary: pacman owns it on the distro plane and
+      # nixpkgs owns it on the home-manager plane, while Codex itself remains vendor-owned and
+      # self-updatable. Keep both names in the catalogue so the requirement follows the selection
+      # rather than being copied into every host that happens to select Codex today.
+      runtime = {
+        archPackages = [ "bubblewrap" ];
+        nixpkgsPackages = [ "bubblewrap" ];
+      };
+
       # ⚠ THIS ENTRY READ `upstream = null` FROM 2026-08-07 TO 2026-08-11, AND THAT WAS WRONG.
       # The recorded finding was "openai.com/codex/install.sh answers 403". The URL answers 403
       # because it was never OpenAI's -- the installer is served from a different host entirely,
@@ -448,6 +463,10 @@
         `install-context` classifies an unrecognised exe path as `InstallMethod::Other`, which maps
         to no update action, so the TUI silently stops offering updates and `codex update` exits
         with "Could not detect the Codex installation method". Frozen, with no error to search for.
+
+        On Linux, selecting this entry also installs the distribution's `bubblewrap` package.
+        Codex uses the first `bwrap` on PATH; its bundled helper is a fallback rather than the
+        declared host prerequisite.
       '';
     };
 

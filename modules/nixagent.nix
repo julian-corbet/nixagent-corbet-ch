@@ -8,7 +8,8 @@
 # `arch.nix` whose entire body was `imports = [ ./nixagent.nix ];` would be a file that exists to
 # be an indirection. The lists below are published; the host wires them:
 #
-#   nixarch.packages.pacman = config.nixagent.archPackages;
+#   nixarch.packages.pacman = config.nixagent.archPackages
+#                              ++ config.nixagent.runtimeArchPackages;
 #   nixarch.packages.aur    = config.nixagent.aurPackages;
 #
 # PUBLISHED, NOT WIRED, and that is a choice rather than an omission. This module could assign
@@ -116,6 +117,23 @@ in
       '';
     };
 
+    runtimeArchPackages = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      description = ''
+        Official-repository runtime prerequisites of the selected clients, as pacman names.
+        Kept separate from `archPackages` because these are the ground a client runs on, not
+        additional client selections. Feed both lists to the host reconciler:
+
+          nixarch.packages.pacman =
+            config.nixagent.archPackages ++ config.nixagent.runtimeArchPackages;
+
+        Currently this is `bubblewrap` when `openai-codex` is selected. Codex's Linux sandbox
+        uses the first `bwrap` on PATH and documents the distribution package as the reliable
+        prerequisite; the bundled helper is only a fallback.
+      '';
+    };
+
     aurPackages = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       readOnly = true;
@@ -150,6 +168,8 @@ in
     nixagent.selected = selected;
     nixagent.archPackages = lib.unique (map (t: t.arch) (lib.filter (t: !(fromAur t)) selected));
     nixagent.aurPackages = lib.unique (map (t: t.arch) (lib.filter fromAur selected));
+    nixagent.runtimeArchPackages = lib.unique
+      (lib.concatMap (t: (t.runtime or { archPackages = [ ]; }).archPackages) selected);
     # Derived from `selected`, not from `cfg.cli` -- so a future group needs no edit here beyond
     # the one line in `selected` above.
     nixagent.binaries =

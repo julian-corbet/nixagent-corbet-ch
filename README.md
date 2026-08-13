@@ -19,7 +19,8 @@ nixagent.distro = "cachyos";               # or "arch" (the default)
 nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" "omp" ];
 nixagent.desktop = [ "claude-cowork-linux" ];
 
-nixarch.packages.pacman = config.nixagent.archPackages;
+nixarch.packages.pacman =
+  config.nixagent.archPackages ++ config.nixagent.runtimeArchPackages;
 nixarch.packages.aur    = config.nixagent.aurPackages;
 ```
 
@@ -81,10 +82,23 @@ updater working.
 ### What "never nixpkgs" does *not* mean
 
 The prohibition is on nix owning the **tool**. It says nothing about nix supplying that tool's
-**runtime** or its installer's dependencies. `programs.nix-ld` providing a dynamic loader, and
-`nixagent.home.extraPath` handing the vendor's script a nixpkgs `curl` and `bash`, are not
-exceptions to the rule — they are the rule working. Nix builds the ground the vendor's artifact
-stands on; the artifact stays the vendor's, mutable, and updatable by its own updater.
+**runtime** or its installer's dependencies. `programs.nix-ld` providing a dynamic loader,
+`nixagent.home.extraPath` handing the vendor's script a nixpkgs `curl` and `bash`, and Codex's
+declarative `bubblewrap` runtime are not exceptions to the rule — they are the rule working. Nix
+builds the ground the vendor's artifact stands on; the artifact stays the vendor's, mutable, and
+updatable by its own updater.
+
+### Codex sandbox prerequisite
+
+On Linux, selecting `openai-codex` also selects the distribution's `bubblewrap` package. Codex uses
+the first `bwrap` on `PATH`; without it, the client warns and falls back to a bundled helper whose
+operation depends on unprivileged user namespaces. The declared package is the reliable setup
+recommended by the [official sandbox prerequisites](https://developers.openai.com/codex/concepts/sandboxing#prerequisites).
+
+- Distro plane: `nixagent.runtimeArchPackages = [ "bubblewrap" ]`, wired into pacman beside
+  `archPackages`.
+- Upstream/home-manager plane: `pkgs.bubblewrap` enters `home.packages`; Codex itself remains
+  installed by the vendor and absent from the Nix store.
 
 ## The second delivery mode, and the measurement that forced it
 
@@ -99,9 +113,10 @@ So there is a second plane, and its contract is one sentence:
 
 > **Nix ensures the tool exists and is on PATH. Nix never owns it.**
 
-No `home.packages`, no `home.file` for a binary, no hash and no version anywhere — `checks/
-home-eval.nix` asserts that absence, because the absence *is* the design. Afterwards `claude
-update`, `omp`'s self-update and the rest keep working, which is the whole point.
+No agent client in `home.packages`, no `home.file` for a binary, no hash and no version anywhere —
+`checks/home-eval.nix` asserts that boundary. A distro-owned runtime such as Codex's `bubblewrap`
+may be in `home.packages`; the agent itself never is. Afterwards `claude update`, `omp`'s
+self-update and the rest keep working, which is the whole point.
 
 The two modes answer different questions, and neither wins globally:
 
@@ -271,7 +286,7 @@ concluding the vendor ships nothing.
 | Path | Purpose |
 |---|---|
 | `flake.nix` | Flake entry point: `systemManagerModules`, `homeManagerModules`, `lib.catalogue`, `lib.policy`, `checks`. No `nixosModules` — see above. |
-| `lib/agents.nix` | The catalogue: one entry per agent client, with its pacman name, command, AUR status, vendor installer, and the policy `nixpkgs = null`. |
+| `lib/agents.nix` | The catalogue: one entry per agent client, with its pacman name, command, AUR status, vendor installer, runtime prerequisites, and the policy `nixpkgs = null` for the client itself. |
 | `lib/install-upstream.sh` | The upstream plane's shell half: one sourceable function that probes, fetches, runs and **verifies** a vendor installer. Inlined into the activation script by `modules/home.nix` and executed for real by `checks/upstream-install.nix` — one implementation, not a copy. |
 | `modules/nixagent.nix` | Distro plane: options, catalogue resolution, and the published `archPackages`/`aurPackages`/`binaries`. Also *is* the Arch backend — there is nothing platform-specific left for a second file to hold. |
 | `modules/home.nix` | Upstream plane: `nixagent.home.*`, one activation entry, `home.sessionPath`, and the published `binaries`/`paths`/`prefixes`. |
@@ -319,8 +334,9 @@ the package name; `--binary` and `--no-modify-path` present where they are load-
 `--env 'CODEX_NON_INTERACTIVE=1'` rendered as one quoted word and on no other entry; the loader
 flag emitted per entry and **absent** on codex; each vendor's own prefix on `home.sessionPath`,
 deduplicated; a selection with no vendor installer refused at eval time while `openai-codex` is
-accepted; and — mechanising the contract — **no `home.packages`, no `home.file`, no version, hash
-or store path anywhere in the rendered script**.
+accepted; and — mechanising the contract — **no agent client in `home.packages`, no `home.file`, no
+version, hash or store path anywhere in the rendered script**. Codex is the one selection with a
+`home.packages` member, and that member is exactly `pkgs.bubblewrap`, its distro-owned runtime.
 
 **`upstream-install`** shellchecks `lib/install-upstream.sh` and then *runs* it against a stubbed
 `curl` through thirteen cases, including: it installs when the tool is absent; on a second

@@ -15,10 +15,11 @@
 #
 # THE CONTRACT, stated once here and enforced in ../lib/install-upstream.sh: nix's job is to make
 # sure the tool EXISTS and is on PATH. Nix never owns the binary, never learns its version, never
-# rewrites it. There is deliberately no `home.packages` entry, no `home.file` for a binary and no
-# hash anywhere on this plane -- checks/home-eval.nix asserts the absence, because that absence IS
-# the design. Afterwards the tool's own `update` command keeps working, which is the entire reason
-# to install it this way rather than any other.
+# rewrites it. There is deliberately no `home.packages` entry for an AGENT and no `home.file` for
+# a binary. A selected client may declare ordinary distro runtime ground there -- Codex needs
+# `bubblewrap` -- without putting the client itself in the store. checks/home-eval.nix holds that
+# boundary. Afterwards the tool's own `update` command keeps working, which is the entire reason to
+# install it this way rather than any other.
 #
 # WHY HOME-MANAGER AND NOT system-manager/NixOS. The installers put things under $HOME and refuse
 # to run as root (Anthropic's exits with an explanation if invoked under sudo). A per-user prefix
@@ -32,7 +33,7 @@
 # reports it at activation, where both are finally visible.
 #
 # ONE NAMESPACE. Everything here lives under `nixagent.home`, like every repo in this family.
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.nixagent.home;
   cat = import ../lib/agents.nix { };
@@ -51,6 +52,13 @@ let
   installable = lib.filterAttrs (_: t: t.upstream != null) entries;
 
   selected = map (k: installable.${k} // { name = k; }) cfg.upstream;
+
+  # Distro-owned runtime ground for the selected vendor binaries. This is deliberately separate
+  # from `extraPath`, whose packages exist only while an installer is running. `bubblewrap` must
+  # remain on the interactive PATH because Codex discovers `bwrap` when the client starts.
+  runtimePackages = lib.unique (lib.concatMap
+    (t: map (n: pkgs.${n}) (t.runtime or { nixpkgsPackages = [ ]; }).nixpkgsPackages)
+    selected);
 
   homeDir = config.home.homeDirectory;
   prefixOf = t: "${homeDir}/${builtins.dirOf t.upstream.installs}";
@@ -313,5 +321,6 @@ in
     # harder to spot.
     home.activation = lib.mkIf (selected != [ ]) { nixagentUpstream = activationEntry; };
     home.sessionPath = lib.mkIf (cfg.addToPath && selected != [ ]) cfg.prefixes;
+    home.packages = runtimePackages;
   };
 }
