@@ -26,12 +26,20 @@
       systemManagerModules.nixagent = ./modules/nixagent.nix;
       systemManagerModules.default = ./modules/nixagent.nix;
 
+      # cfetch — the memory/retrieval brain the catalogued clients consult. Beside the catalogue,
+      # not in it: it does not self-update, so the never-nixpkgs rule that defines the catalogue
+      # does not bind it (its NixOS plane is its own flake, github:julian-corbet/cfetch). The
+      # system plane publishes its AUR name; the home plane owns config/daemon/registration.
+      # See modules/cfetch.nix's header for the full boundary argument.
+      systemManagerModules.cfetch = ./modules/cfetch.nix;
+
       # Home-manager: the UPSTREAM delivery mode. Runs each selected tool's own vendor installer
       # into that vendor's own per-user prefix, once, and puts it on PATH -- nix ensures the tool
       # exists and never owns it. This is how a NixOS host gets these tools, and how ANY host gets
       # one whose distro package has fallen behind (measured: the AUR carried omp 17.2.2/17.2.3
       # against an upstream 17.2.12 on 2026-08-10, both flagged out of date). Independent of the
       # system plane above: a consumer picks per host, and neither is forced.
+      homeManagerModules.cfetch = ./modules/cfetch-home.nix;
       homeManagerModules.nixagent = ./modules/home.nix;
       homeManagerModules.home = ./modules/home.nix;
       homeManagerModules.default = ./modules/home.nix;
