@@ -38,12 +38,10 @@ in
     aurPackages = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       readOnly = true;
-      default = [ ];
       description = "What the host's AUR reconciler should install. Empty unless enabled.";
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    nixagent.cfetch.aurPackages = lib.mkForce [ cfg.package ];
-  };
+  # The single definition a read-only option allows: computed, never assigned by consumers.
+  config.nixagent.cfetch.aurPackages = lib.optional cfg.enable cfg.package;
 }
