@@ -28,7 +28,7 @@
 
       # cfetch — the memory/retrieval brain the catalogued clients consult. Beside the catalogue,
       # not in it: it does not self-update, so the never-nixpkgs rule that defines the catalogue
-      # does not bind it (its NixOS plane is its own flake, github:julian-corbet/cfetch). The
+      # does not bind it (its NixOS plane is its own flake, github:corbet-labs/cfetch). The
       # system plane publishes its AUR name; the home plane owns config/daemon/registration.
       # See modules/cfetch.nix's header for the full boundary argument.
       systemManagerModules.cfetch = ./modules/cfetch.nix;

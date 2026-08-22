@@ -8,7 +8,7 @@
 # they SELF-UPDATE, which is what makes nixpkgs ownership structurally impossible for them. cfetch
 # fails that membership test on both halves: it drives no model (it is the local memory/retrieval
 # layer those clients consult), and it does not self-update — it is a versioned release artifact
-# with a tag, a changelog, and its OWN nix flake (github:julian-corbet/cfetch), so nix ownership
+# with a tag, a changelog, and its OWN nix flake (github:corbet-labs/cfetch), so nix ownership
 # is not merely possible but the natural NixOS plane. Forcing it into the catalogue would make
 # that file's loudest invariant ("every entry carries nixpkgs = null, and the reason is
 # self-update") false for one row. A tool this repo's domain covers but the catalogue's rule does
