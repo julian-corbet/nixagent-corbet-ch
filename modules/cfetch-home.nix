@@ -79,6 +79,27 @@ in
       Install.WantedBy = [ "default.target" ];
     };
 
+    # A package upgrade replaces /usr/bin/cfetch without restarting the
+    # already-running daemon, so ExecStartPre alone cannot repair embedded
+    # hook/MCP paths. The path unit gives binary replacement its own oneshot
+    # registration path; immutable Nix-store binaries still use activation.
+    systemd.user.services.cfetch-register = lib.mkIf cfg.registerAgents {
+      Unit.Description = "Repair cfetch agent registration after a binary update";
+      Service = {
+        Type = "oneshot";
+        ExecStart = "-${cfg.binary} install";
+      };
+    };
+
+    systemd.user.paths.cfetch-register = lib.mkIf cfg.registerAgents {
+      Unit.Description = "Watch the cfetch binary for package replacement";
+      Path = {
+        PathChanged = cfg.binary;
+        Unit = "cfetch-register.service";
+      };
+      Install.WantedBy = [ "default.target" ];
+    };
+
     # This is the literal record returned by lib.hm.dag.entryAfter. Keeping the
     # small record here makes this module evaluable in the flake's checks without
     # importing Home Manager as a second flake input.
