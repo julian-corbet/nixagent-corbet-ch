@@ -70,6 +70,7 @@
       # check`; `--no-build` evaluates it and stops.
       checks = forAllSystems (system: {
         agents-eval = import ./checks/agents-eval.nix { pkgs = pkgsFor system; };
+        cfetch-home-eval = import ./checks/cfetch-home-eval.nix { pkgs = pkgsFor system; };
         home-eval = import ./checks/home-eval.nix { pkgs = pkgsFor system; };
         upstream-install = import ./checks/upstream-install.nix { pkgs = pkgsFor system; };
       });

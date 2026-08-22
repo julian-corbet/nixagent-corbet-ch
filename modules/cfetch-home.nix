@@ -49,6 +49,15 @@ in
       default = true;
       description = "Run `cfetch install` at activation (idempotent tagged merges).";
     };
+
+    registrationAfter = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Additional Home Manager activation entries that must finish before cfetch registers.
+        Use this when another module renders an agent instruction file that cfetch marker-merges.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -60,18 +69,30 @@ in
         ExecStart = "${cfg.binary} daemon run";
         Restart = "on-failure";
         RestartSec = 5;
+      } // lib.optionalAttrs cfg.registerAgents {
+        # Package/store-path changes can happen independently of a home
+        # activation. Repair embedded absolute hook/MCP paths whenever the
+        # daemon starts; `-` keeps registration drift from taking memory
+        # serving down, while selfcheck still reports it loudly.
+        ExecStartPre = "-${cfg.binary} install";
       };
       Install.WantedBy = [ "default.target" ];
     };
 
-    home.activation.cfetchRegister = lib.mkIf cfg.registerAgents
-      (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    # This is the literal record returned by lib.hm.dag.entryAfter. Keeping the
+    # small record here makes this module evaluable in the flake's checks without
+    # importing Home Manager as a second flake input.
+    home.activation.cfetchRegister = lib.mkIf cfg.registerAgents {
+      after = [ "writeBoundary" ] ++ cfg.registrationAfter;
+      before = [ ];
+      data = ''
         if [ -x ${lib.escapeShellArg cfg.binary} ]; then
           run ${lib.escapeShellArg cfg.binary} install || \
             echo "cfetch install failed (non-fatal; re-runs next activation)" >&2
         else
           echo "cfetch binary not present yet at ${cfg.binary}; registration deferred" >&2
         fi
-      '');
+      '';
+    };
   };
 }
