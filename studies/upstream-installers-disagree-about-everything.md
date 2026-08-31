@@ -1,9 +1,9 @@
-# Three vendor installers, three prefixes, and one that changes its mind — why `upstream` is a per-entry record
+# Vendor installers disagree about paths and flags — why `upstream` is a per-entry record
 
-**Finding.** The three catalogued vendor installers were read line by line on 2026-08-10. They
-agree on the interface they present (`curl -fsSL <url> | sh`) and on nothing else. One installs to
-`~/.local/bin`, one to `~/.opencode/bin`, and one picks its destination at runtime based on whether
-an *unrelated* tool is installed on the machine. Two of them edit files outside their prefix.
+**Finding.** The catalogued vendor installers agree on the interface they present
+(`curl -fsSL <url> | sh`) and little else. Three install to `~/.local/bin`, one installs to
+`~/.opencode/bin`, and one picks a different destination unless a mandatory flag prevents it.
+Two edit files outside their prefix by default.
 
 **Decided:** `upstream` in `lib/agents.nix` is a per-entry record of `url` / `runner` / `args` /
 `installs`, not a module-wide `prefix` option; two entries carry mandatory flags; and
@@ -71,7 +71,7 @@ INSTALL_DIR=$HOME/.opencode/bin
 ```
 
 Hard-coded, honouring no environment variable. This single line is why there is no module-wide
-`prefix` option: two of three installers use `~/.local/bin` and this one does not, and none of them
+`prefix` option: three of four installers use `~/.local/bin` and this one does not, and none of them
 can be told otherwise. A `nixagent.home.prefix` would be an option that appears to steer something
 it cannot.
 
@@ -81,23 +81,26 @@ home those files are generated, so the edit is either discarded at the next swit
 fights it. `--no-modify-path` suppresses it, and `nixagent.home.addToPath` publishes the directory
 through `home.sessionPath` instead — declaratively, where it survives.
 
-## The two entries with no installer, and why npm was not accepted as one
+### `chatgpt.com/codex/install.sh` — bash, `~/.local/bin/codex`
 
-`gemini-cli` and `openai-codex` carry `upstream = null`. Checked 2026-08-10:
-`gemini.google.com/install.sh` → **404**, the repository's own `install.sh` on `main` → **404**,
-`openai.com/codex/install.sh` → **403**. Both projects distribute through npm and Homebrew plus
-per-release binaries with no script to place them.
+Codex's official installer downloads a static Linux binary into `~/.local/bin/codex`. It uses
+`CODEX_NON_INTERACTIVE=1` rather than a command-line flag to suppress prompts, and requires `awk`
+to parse release metadata. Both are catalogue fields because activation must be deterministic and
+a missing parser otherwise presents as a network failure.
 
-`npm install -g` was considered and rejected as an upstream mode. It installs into whichever node
-prefix is configured — a nix-store node's is read-only, a system node's is root-owned, an nvm
-node's moves with the active version — so the path this catalogue would have to record as
-`installs` is a property of the host's node setup rather than of the tool. That is precisely the
-ambiguity `omp`'s bun branch demonstrates, generalised, and there is no `--binary` equivalent to
-resolve it.
+## Entries with no installer script
 
-`claude-cowork-linux` carries `upstream = null` structurally: the AUR package is a third party's
-repackaging of a proprietary Electron application, so there is no vendor per-user installer to run
-at all.
+`gemini-cli` carries `upstream = null`: the vendor distributes it through npm, with no per-user
+Linux installer script. `npm install -g` was considered and rejected as an upstream mode. It
+installs into whichever node prefix is configured — a nix-store node's is read-only, a system
+node's is root-owned, and an nvm node's moves with the active version — so the path this catalogue
+would have to record as `installs` is a property of the host's node setup rather than of the tool.
+That is precisely the ambiguity `omp`'s bun branch demonstrates, generalised, and there is no
+`--binary` equivalent to resolve it.
+
+`chatgpt-desktop` and `claude-desktop` also carry `upstream = null`: their vendors publish Linux
+distribution packages, not per-user installer scripts. The home plane deliberately does not unpack
+`.deb` files into a user prefix.
 
 ## `curl | sh` is not safe to run from an activation script
 

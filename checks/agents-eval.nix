@@ -86,8 +86,8 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 5, desktop: 1, total: 6)" =
-      lib.length archAll.selected == 6
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 5, desktop: 2, total: 7)" =
+      lib.length archAll.selected == 7
       && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
@@ -113,10 +113,9 @@ let
       !(o ? nixosPackages) && !(o ? unavailableOnNixos) && !(o ? nixpkgsPackages);
 
     # ── The distro-dependent entry ────────────────────────────────────────────────────────────
-    # claude-code is in no upstream Arch repository (archlinux.org search: 0 results) but IS in
-    # CachyOS's own repo and in the AUR. It is the only entry whose correct list depends on the
-    # host, and the reason `archRepoOn`/`nixagent.distro` exist -- so pin the behaviour here where
-    # a future edit cannot quietly undo it.
+    # Several clients are in no upstream Arch repository but are in both the AUR and CachyOS's own
+    # repo. Pin each distro-dependent result so a future edit cannot quietly put an AUR-only name
+    # into pacman's transaction.
     "claude-code is AUR on plain Arch -- the safe floor, since upstream Arch packages it nowhere" =
       has archAll.aurPackages "claude-code" && !(has archAll.archPackages "claude-code");
 
@@ -127,19 +126,26 @@ let
       let d = evalWith { cli = [ "claude-code" ]; }; in
       d.aurPackages == [ "claude-code" ] && d.archPackages == [ ];
 
-    "claude-cowork-linux is AUR on EVERY distro -- unlike claude-code, it carries no archRepoOn, so there is no repository lift to apply on any of them" =
-      has archAll.aurPackages "claude-cowork-linux" && !(has archAll.archPackages "claude-cowork-linux")
-      && has cachyAll.aurPackages "claude-cowork-linux" && !(has cachyAll.archPackages "claude-cowork-linux");
+    "claude-desktop is AUR on plain Arch and moves to the CachyOS repository under the same package name" =
+      has archAll.aurPackages "claude-desktop" && !(has archAll.archPackages "claude-desktop")
+      && has cachyAll.archPackages "claude-desktop" && !(has cachyAll.aurPackages "claude-desktop");
 
-    "`archRepoOn` is scoped to the entry that needs it -- it does not leak an official-repo claim onto the rest of the catalogue on ANY distro" =
-      sorted cachyAll.aurPackages == [ "claude-cowork-linux" "oh-my-pi-bin" ]
-      && sorted archAll.aurPackages == [ "claude-code" "claude-cowork-linux" "oh-my-pi-bin" ];
+    "ChatGPT Desktop uses the AUR name on plain Arch and the distinct CachyOS repository name on CachyOS" =
+      has archAll.aurPackages "chatgpt-desktop"
+      && !(has archAll.archPackages "chatgpt-desktop")
+      && !(has (archAll.archPackages ++ archAll.aurPackages) "chatgpt-desktop-bin")
+      && has cachyAll.archPackages "chatgpt-desktop-bin"
+      && !(has cachyAll.aurPackages "chatgpt-desktop-bin")
+      && !(has (cachyAll.archPackages ++ cachyAll.aurPackages) "chatgpt-desktop");
+
+    "repository lifts are scoped to their entries and leave only omp on the CachyOS AUR list" =
+      sorted cachyAll.aurPackages == [ "oh-my-pi-bin" ]
+      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "oh-my-pi-bin" ];
 
     # omp is in no upstream Arch repository and in no derivative's repository either (all three of
     # `oh-my-pi-bin`, `oh-my-pi` and `omp` checked 2026-08-10 -- see its catalogue entry), so it
     # carries no `archRepoOn` and must stay on the AUR list whatever the host says it runs. Pinned
-    # separately from the claude-cowork-linux case above because they got there for different
-    # reasons and a future `archRepoOn` on either would silently pass the other's assertion.
+    # separately because a future `archRepoOn` would silently move it to the wrong transaction.
     "omp is AUR on EVERY distro, under its PACKAGE name -- the key `omp` is the tool, `oh-my-pi-bin` is the package, and only the latter may reach a package list" =
       has archAll.aurPackages "oh-my-pi-bin" && has cachyAll.aurPackages "oh-my-pi-bin"
       && !(has archAll.archPackages "oh-my-pi-bin") && !(has cachyAll.archPackages "oh-my-pi-bin")
@@ -160,7 +166,8 @@ let
         openai-codex = "codex";
         opencode = "opencode";
         omp = "omp";
-        claude-cowork-linux = "claude-cowork";
+        chatgpt-desktop = "chatgpt";
+        claude-desktop = "claude-desktop";
       };
 
     # omp is the sharpest case in the catalogue: catalogue key `omp`, pacman name `oh-my-pi-bin`,
@@ -223,6 +230,20 @@ let
       lib.all (d: lib.elem d [ "arch" "cachyos" ])
         (lib.concatMap (t: t.archRepoOn or [ ])
           (lib.concatMap (g: lib.attrValues cat.${g}) (lib.attrNames cat)));
+
+    "every `archPackageOn` override names a supported distro whose repository is explicitly selected for that entry" =
+      lib.all
+        (t:
+          lib.all
+            (d: lib.elem d [ "arch" "cachyos" ] && lib.elem d (t.archRepoOn or [ ]))
+            (lib.attrNames (t.archPackageOn or { })))
+        allEntries;
+
+    "ChatGPT Desktop is the one measured cross-distro package-name override" =
+      cat.desktop.chatgpt-desktop.arch == "chatgpt-desktop"
+      && cat.desktop.chatgpt-desktop.archPackageOn == { cachyos = "chatgpt-desktop-bin"; }
+      && lib.all (t: !(t ? archPackageOn))
+        (lib.filter (t: t.binary != "chatgpt") allEntries);
 
     # ── The SECOND delivery mode's catalogue half ─────────────────────────────────────────────
     # ../modules/home.nix runs `upstream.url` with `upstream.runner` and then probes
@@ -312,14 +333,14 @@ let
       lib.length allKeys == lib.length (lib.unique allKeys);
 
     # The entries that carry `upstream = null` each record what was checked (npm/Node-only
-    # distribution with no Linux release artifact, or a third-party repackaging with no vendor
-    # installer to run). Pinned so that "add an installer URL" stays a deliberate edit with a
+    # distribution or vendor Linux packages with no per-user installer script). Pinned so that
+    # "add an installer URL" stays a deliberate edit with a
     # measurement behind it rather than something a refactor can invent.
     #
     # This list GREW on 2026-08-11 and the assertion is here to make that visible when it happens:
     # openai-codex moved out of the null set because the 403 it was recorded on came from a URL the
     # vendor never used. Updating this line is the moment to write down what was actually probed.
-    "exactly the researched entries carry a vendor installer -- claude-code, openai-codex, opencode and omp; gemini-cli and claude-cowork-linux carry a recorded null" =
+    "exactly the researched entries carry a vendor installer -- the two desktop apps and gemini-cli carry recorded nulls" =
       sorted
         (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
           (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))

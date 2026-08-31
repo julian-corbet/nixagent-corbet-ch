@@ -1,5 +1,5 @@
 {
-  description = "nixagent — agentic AI clients (Claude Code, Claude Cowork, Gemini CLI, Codex, opencode, omp), declared per host and installed from pacman/AUR or the vendor's own installer, never nixpkgs";
+  description = "nixagent — agentic AI clients (Claude Code, Claude Desktop, ChatGPT Desktop, Gemini CLI, Codex, opencode, omp), declared per host and installed from pacman/AUR or the vendor's own installer, never nixpkgs";
 
   # NO INPUTS FOR CONSUMERS, same reasoning nixmsg and nixdev state for themselves: this flake is
   # options plus a catalogue, taking `pkgs`/`config`/`lib` from whichever evaluation composes it,

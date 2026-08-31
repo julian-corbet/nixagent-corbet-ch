@@ -218,8 +218,8 @@ let
     "the selection is typed to entries that HAVE an installer -- naming gemini-cli is refused at eval time, not discovered on a host" =
       (builtins.tryEval (builtins.deepSeq (evalWith { upstream = [ "gemini-cli" ]; }).nixagent.home.upstream true)).success == false;
 
-    "a desktop entry with no vendor installer is refused the same way -- claude-cowork-linux is a third-party repackaging with nothing to run" =
-      (builtins.tryEval (builtins.deepSeq (evalWith { upstream = [ "claude-cowork-linux" ]; }).nixagent.home.upstream true)).success == false;
+    "a desktop entry with no vendor installer script is refused -- distro packages are not unpacked into the home plane" =
+      (builtins.tryEval (builtins.deepSeq (evalWith { upstream = [ "claude-desktop" ]; }).nixagent.home.upstream true)).success == false;
 
     # openai-codex is deliberately NOT in the refused pair any more -- it moved into the selectable
     # set on 2026-08-11 when its real installer URL was found. Asserted as selectable in the

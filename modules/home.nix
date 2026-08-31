@@ -168,9 +168,9 @@ in
         lib/agents.nix's own header.
 
         The list is typed to the catalogue entries that HAVE a vendor installer. Naming one that
-        does not (`gemini-cli`, `claude-cowork-linux` -- each records what was checked, with a
-        date and a method) fails at eval time, which is the point: the alternative is an activation
-        that looks fine and installs nothing.
+        does not (`gemini-cli`, `chatgpt-desktop`, `claude-desktop` -- each records what was
+        checked) fails at eval time, which is the point: the alternative is an activation that
+        looks fine and installs nothing.
 
         THE SET IS NOT FIXED AND HAS GROWN. `openai-codex` was in that refused list until
         2026-08-11, on a recorded 403 -- from a URL OpenAI never served the installer from. Its

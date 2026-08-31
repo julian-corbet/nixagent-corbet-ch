@@ -55,17 +55,22 @@ let
   ];
 
   # An entry is AUR *for this host* unless the host's distro is one whose own repositories carry
-  # it -- see `archRepoOn` in ../lib/agents.nix, and the `claude-code` entry for the only case
-  # today. Deliberately resolved HERE rather than in the catalogue: which repositories a name is
-  # in is a fact about the world (catalogue), which of them this machine can reach is a fact about
-  # the machine (config).
+  # it -- see `archRepoOn` in ../lib/agents.nix. Deliberately resolved HERE rather than in the
+  # catalogue: which repositories a name is in is a fact about the world (catalogue), which of
+  # them this machine can reach is a fact about the machine (config).
   fromAur = t: (t.aur or false) && !(lib.elem cfg.distro (t.archRepoOn or [ ]));
+
+  # A derivative can publish the same upstream application under a different package name. The
+  # plain-Arch/AUR name remains `arch`, the safe floor; `archPackageOn` changes only the emitted
+  # name on the explicitly named derivative. ChatGPT Desktop is the real case: the AUR calls the
+  # package `chatgpt-desktop`, while CachyOS calls its repository package `chatgpt-desktop-bin`.
+  packageName = t: (t.archPackageOn or { }).${cfg.distro} or t.arch;
 in
 {
   options.nixagent = {
     cli = mkGroup "agentic AI CLIs -- terminal clients driving a remote frontier model (see ../lib/agents.nix's own header for the boundary against nixllm, which serves models, and nixsh, which is universal)" cat.cli;
 
-    desktop = mkGroup "desktop AI clients -- Electron windows driving a remote frontier model, same AUR/self-update delivery problem as \`cli\` above and kept in its own group only so \`cli\`'s own meaning stays literally true (see ../lib/agents.nix's own header)" cat.desktop;
+    desktop = mkGroup "desktop AI clients -- graphical applications driving a remote frontier model, with the same delivery boundary as \`cli\` and a separate group so \`cli\` keeps meaning terminal clients (see ../lib/agents.nix's own header)" cat.desktop;
 
     distro = lib.mkOption {
       type = lib.types.enum [ "arch" "cachyos" ];
@@ -166,8 +171,8 @@ in
 
   config = {
     nixagent.selected = selected;
-    nixagent.archPackages = lib.unique (map (t: t.arch) (lib.filter (t: !(fromAur t)) selected));
-    nixagent.aurPackages = lib.unique (map (t: t.arch) (lib.filter fromAur selected));
+    nixagent.archPackages = lib.unique (map packageName (lib.filter (t: !(fromAur t)) selected));
+    nixagent.aurPackages = lib.unique (map packageName (lib.filter fromAur selected));
     nixagent.runtimeArchPackages = lib.unique
       (lib.concatMap (t: (t.runtime or { archPackages = [ ]; }).archPackages) selected);
     # Derived from `selected`, not from `cfg.cli` -- so a future group needs no edit here beyond

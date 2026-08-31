@@ -1,7 +1,7 @@
 #
 # The agent catalogue: clients for REMOTE frontier models -- one entry per selectable package,
 # naming it on each platform this repo is willing to install from. Two shapes today, `cli` (a
-# terminal binary) and `desktop` (an Electron window); THE PLACEMENT RULE below is why both belong
+# terminal binary) and `desktop` (a graphical application); THE PLACEMENT RULE below is why both belong
 # in the same file despite the different interface.
 #
 # THE PLACEMENT RULE, stated as a boundary rather than a list, in the same shape nixsh's own
@@ -13,15 +13,11 @@
 #            has -- that split is about grouping honestly, not about eligibility
 #     no  -> it belongs to whichever repo owns the thing it actually is
 #
-# Whether the tool opens a terminal or a window is NOT the eligibility test, and it is worth being
-# explicit that this file used to apply exactly that clause: `claude-cowork-linux` was checked
-# against it and excluded for failing it, see
-# ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md. The category a person actually
-# maintains is "my AI tooling", and an Electron client sits in it the same way a terminal one does
-# -- both carry the identical delivery problem below (AUR-only, self-updating, must never be
-# pinned by nixpkgs) regardless of which surface renders the reply. The `.desktop`-entry test from
-# that study still correctly separates `cli` from `desktop`; it no longer separates "in this
-# catalogue" from "not".
+# Whether the tool opens a terminal or a window is NOT the eligibility test. The category a person
+# actually maintains is "my AI tooling", and a desktop client sits in it the same way a terminal
+# one does: both carry the identical delivery problem below regardless of which surface renders
+# the reply. A packaged `.desktop` entry separates `cli` from `desktop`; it does not separate "in
+# this catalogue" from "not".
 #
 # Two neighbours this rule is drawn against, both of which could plausibly have claimed these
 # entries, and neither of which should:
@@ -34,7 +30,7 @@
 #   - nixsh is universal BY CONSTRUCTION -- every host has a shell and reaches for a terminal tool,
 #     which is exactly why that catalogue has no per-host story to build. These do not have that
 #     property and must not inherit it: a small production server has a shell and wants `ripgrep`,
-#     and emphatically does not want a self-updating agent client and its Node/Electron runtime --
+#     and emphatically does not want a self-updating agent client and its desktop runtime --
 #     doubly true for `desktop`, which additionally needs a display the server does not have.
 #     "Runs in a terminal" is a shape, not a domain; nixsh's claim is the domain "every host needs
 #     this", and these fail it regardless of shape.
@@ -121,14 +117,14 @@
 # prefix belongs on a module option and the package name in a field of its own, not smuggled into
 # this one. Nothing below invents either.
 #
-# Mechanically the two modes live on different planes: `arch`/`aur`/`archRepoOn` feed
+# Mechanically the two modes live on different planes: `arch`/`aur`/`archRepoOn`/`archPackageOn` feed
 # ../modules/nixagent.nix (system-manager, publishes package-name lists), `upstream` feeds
 # ../modules/home.nix (home-manager, runs the installer once per user). NOTHING about the upstream
 # mode pins a version -- see ../lib/install-upstream.sh's header for the contract in full.
 #
 # ── FIELDS ─────────────────────────────────────────────────────────────────────────────────────
 #
-# `arch`        the pacman package name.
+# `arch`        the plain-Arch package name: official repository when `aur = false`, AUR when true.
 # `binary`      the command it actually installs. NOT always the package name -- `openai-codex`
 #               ships `codex`, `claude-code` ships `claude`. Published as `nixagent.binaries` for
 #               a consumer writing config or a launcher against these tools, because pointing
@@ -141,8 +137,13 @@
 #               found" and takes every unrelated package in the same converge down with it.
 # `archRepoOn`  (default [ ]) Arch DERIVATIVES whose own repositories carry an otherwise-AUR name,
 #               so a host on one of them gets the repo build instead of a source build. Consumed
-#               against `nixagent.distro` -- see ../modules/nixagent.nix. Exists for exactly one
-#               entry today and is documented at that entry.
+#               against `nixagent.distro` -- see ../modules/nixagent.nix. Present only on entries
+#               that need it.
+# `archPackageOn`
+#               (default { }) package-name overrides keyed by derivative. Only for the real case
+#               where the derivative repository publishes the same application under a different
+#               name from the AUR floor. Its keys must also appear in `archRepoOn`: an override is
+#               emitted only when that derivative's repository is the selected source.
 # `nixpkgs`     always null. See above. The field is present rather than omitted so that a reader
 #               cannot mistake the policy for an oversight.
 # `upstream`    the vendor's own per-user installer, or null. Present on EVERY entry for the same
@@ -224,7 +225,7 @@
 #
 # ── THE ATTRIBUTE KEY NAMES THE TOOL, NOT THE PACKAGE ──────────────────────────────────────────
 #
-# Five of the six keys below happen to equal their `arch` value, which for a long time made the
+# Most keys below happen to equal their `arch` value, which can make the
 # key look like "the pacman name". It is not, and `omp` is where that stops being a coincidence:
 # its pacman name is `oh-my-pi-bin`, where `-bin` is an AUR packaging convention distinguishing
 # one of TWO AUR packages for the same tool, and the key is also what a consumer writes on the
@@ -235,7 +236,7 @@
 #
 # ── VERIFIED, NOT GUESSED ──────────────────────────────────────────────────────────────────────
 #
-# Every `arch` name below was checked on 2026-08-07 against THREE independent sources, because two
+# Every `arch` name below was checked against THREE independent sources, because two
 # of them disagree for one entry and only the third resolves it:
 #
 #   - `pacman -Si <name>` on a live CachyOS system, which reports the repository a name resolves in.
@@ -609,56 +610,72 @@
     };
   };
 
-  # ── Desktop AI clients: an Electron window driving a remote frontier model ────────────────────
+  # ── Desktop AI clients: graphical applications driving remote frontier models ────────────────
   #
-  # Same delivery problem as `cli` above -- AUR-only, self-updating, must never be pinned by
-  # nixpkgs -- despite drawing a window instead of running in a terminal. Kept as its OWN group
+  # Same delivery problem as `cli` above -- fast-moving vendor clients that must never be pinned
+  # by nixpkgs -- despite drawing a window instead of running in a terminal. Kept as its OWN group
   # rather than folded into `cli` so that group's documented meaning ("terminal clients driving a
   # remote frontier model") stays true rather than being quietly stretched to also cover an
-  # Electron app with a `.desktop` entry. See ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md
-  # for the evidence that it genuinely is a window, and this file's own header for why that no
-  # longer excludes it from the catalogue -- only from the `cli` group within it.
+  # desktop app with a `.desktop` entry. This file's own header explains why that excludes it only
+  # from the `cli` group, not from the catalogue.
   desktop = {
-    claude-cowork-linux = {
-      arch = "claude-cowork-linux";
-      binary = "claude-cowork";
-      nixpkgs = null;
-
-      # AUR-only, and unlike `claude-code` there is no repository lift: no Arch derivative's own
-      # repository carries this one, so `archRepoOn` is omitted rather than set to `[ ]` -- the
-      # field's own documentation says it appears only on an entry that needs it, and
-      # checks/agents-eval.nix asserts exactly that. Checked three ways on 2026-08-07, the same
-      # three sources this file's header describes:
+    chatgpt-desktop = {
+      # Plain Arch and CachyOS package the same official OpenAI application under different names.
+      # Verified 2026-08-31:
       #
-      #   archlinux.org package search      -> 0 results. Upstream Arch does not package it, in
-      #                                         any repository, on any architecture.
-      #   AUR RPC                           -> present, PackageBase `claude-cowork-linux`,
-      #                                         1.1.4010-10, maintainer `johnzfitch`, 3 votes.
-      #   `pacman -Si claude-cowork-linux`  -> "error: package 'claude-cowork-linux' was not
-      #                                         found" on the host this was checked from -- no
-      #                                         derivative repository resolves it, so `aur = true`
-      #                                         is not merely the floor here, it is the whole
-      #                                         answer, with nothing for `archRepoOn` to lift.
+      #   archlinux.org package search       -> 0 results.
+      #   AUR RPC (`chatgpt-desktop`)        -> 26.825.51511-1, current; source is OpenAI's
+      #                                          persistent.oaistatic.com Linux .deb.
+      #   `pacman -Si chatgpt-desktop-bin`   -> cachyos/26.825.41651-1, URL
+      #                                          https://chatgpt.com/download.
+      #   CachyOS file database              -> /usr/bin/chatgpt and
+      #                                          /usr/share/applications/chatgpt.desktop.
+      arch = "chatgpt-desktop";
+      archPackageOn.cachyos = "chatgpt-desktop-bin";
+      binary = "chatgpt";
+      nixpkgs = null;
       aur = true;
+      archRepoOn = [ "cachyos" ];
 
-      # NO VENDOR INSTALLER, and structurally so rather than by omission: the AUR package is a
-      # THIRD PARTY's repackaging of a proprietary Electron application (license
-      # `custom:proprietary`, upstream a repackaging repository rather than an Anthropic-published
-      # one -- see ../studies/claude-cowork-is-a-desktop-app-not-a-cli.md). There is no vendor
-      # per-user install script to run, so the upstream plane cannot serve this entry at all and
-      # a NixOS host simply does not get it. Stated, not papered over.
+      # OpenAI publishes Linux packages, not a per-user desktop installer script. The home plane
+      # intentionally runs vendor scripts only; it does not unpack .deb files into a home prefix.
       upstream = null;
 
       note = ''
-        Anthropic's Claude Desktop with Cowork (local agent) support (AUR: johnzfitch/
-        claude-cowork-linux). Package `claude-cowork-linux`, command `claude-cowork` -- the two
-        disagree, same trap `openai-codex` documents above.
+        OpenAI's unified ChatGPT desktop application, including Codex. Catalogue key
+        `chatgpt-desktop`; command `chatgpt`. Plain Arch installs AUR package `chatgpt-desktop`,
+        while CachyOS installs repository package `chatgpt-desktop-bin`.
 
-        An Electron application: it installs a `.desktop` entry (`Type=Application`,
-        `StartupWMClass=Claude`, no `Terminal=true`), which is why it is a `desktop` selection
-        rather than a `cli` one and not, by itself, a reason to leave it out of this catalogue --
-        see the header. The Cowork feature drives Anthropic's remote model, same as `claude-code`;
-        nothing here loads a weight locally.
+        This is separate from the `openai-codex` CLI selection. The CachyOS package provides
+        `openai-codex-desktop` without conflicting with the CLI package.
+      '';
+    };
+
+    claude-desktop = {
+      # Official Linux package, verified 2026-08-31:
+      #
+      #   archlinux.org package search   -> 0 results.
+      #   AUR RPC                        -> claude-desktop 1.40609.0-1, current; source is
+      #                                      downloads.claude.ai's official Linux .deb.
+      #   `pacman -Si claude-desktop`    -> cachyos/1.40609.0-1, URL
+      #                                      https://claude.ai/download.
+      #   CachyOS file database          -> /usr/bin/claude-desktop and
+      #                                      /usr/share/applications/com.anthropic.Claude.desktop.
+      arch = "claude-desktop";
+      binary = "claude-desktop";
+      nixpkgs = null;
+      aur = true;
+      archRepoOn = [ "cachyos" ];
+
+      # Anthropic publishes Linux packages, not a per-user installer script. As with ChatGPT, the
+      # home plane does not invent a .deb extraction mode.
+      upstream = null;
+
+      note = ''
+        Anthropic's official Claude desktop application: Chat, Cowork, and Claude Code in one
+        window. Package and catalogue key `claude-desktop`; command `claude-desktop`. It is a
+        `desktop` selection because it installs a graphical application and `.desktop` entry;
+        nothing here loads a model locally.
       '';
     };
   };

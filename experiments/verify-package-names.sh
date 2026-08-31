@@ -77,6 +77,22 @@ catalogue_upstreams() {
 
 read -r -a upstreams <<<"$(catalogue_upstreams)"
 
+# Derivative repository names that differ from the plain-Arch/AUR floor, as `distro|package`
+# pairs. These cannot be verified by the Arch API or AUR RPC because the derivative owns them.
+catalogue_repository_overrides() {
+  nix-instantiate --eval --strict --expr '
+    let
+      cat = import ./lib/agents.nix { };
+      entries = builtins.concatLists (map builtins.attrValues (builtins.attrValues cat));
+      pairs = builtins.concatLists (map (t:
+        map (d: "${d}|${t.archPackageOn.${d}}")
+          (builtins.attrNames (t.archPackageOn or { }))) entries);
+    in builtins.concatStringsSep " " pairs
+  ' | sed 's/^"//; s/"$//'
+}
+
+read -r -a repository_overrides <<<"$(catalogue_repository_overrides)"
+
 status=0
 
 echo "== Upstream Arch official repos (archlinux.org package search) -- ${#official_names[@]} name(s) =="
@@ -171,6 +187,26 @@ if command -v pacman >/dev/null 2>&1; then
 else
   echo "== pacman not present -- skipping the host-local view (the two authorities above already ran) =="
 fi
+
+echo
+echo "== Derivative package-name overrides -- ${#repository_overrides[@]} name(s) =="
+current_distro=""
+if [[ -r /etc/os-release ]]; then
+  current_distro="$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | sed -n 1p)"
+fi
+for pair in "${repository_overrides[@]}"; do
+  IFS='|' read -r distro pkg <<<"$pair"
+  if [[ "$current_distro" != "$distro" ]] || ! command -v pacman >/dev/null 2>&1; then
+    echo "SKIP $distro/$pkg -- requires a live $distro pacman repository view"
+  elif out="$(pacman -Si "$pkg" 2>/dev/null)" \
+    && repo="$(printf '%s\n' "$out" | sed -n 's/^Repository *: *//p' | sed -n 1p)" \
+    && [[ -n "$repo" ]]; then
+    echo "OK   $distro/$pkg -> $repo"
+  else
+    echo "FAIL $distro/$pkg -- archPackageOn names a package this derivative cannot resolve"
+    status=1
+  fi
+done
 
 echo
 if [[ $status -eq 0 ]]; then

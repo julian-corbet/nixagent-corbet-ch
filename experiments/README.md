@@ -16,6 +16,8 @@ file below.
     stopped tracking upstream, which is the finding behind
     [`../studies/the-aur-lags-upstream-too.md`](../studies/the-aur-lags-upstream-too.md) and the
     signal that a host wanting the tool current belongs on `nixagent.home.upstream`;
+  - every `archPackageOn` derivative name checked with `pacman -Si` when the script is running on
+    that derivative, so a CachyOS-only name cannot be added on catalogue faith alone;
   - every `upstream.url` **fetched**, and its first line checked for a `#!`. A vendor installer can
     404, move, or start answering with an HTML error page without anything in this repo changing.
 
@@ -46,8 +48,7 @@ There is no nixpkgs-resolution script, unlike the sibling repos' versions of thi
 Nothing in this catalogue names a nixpkgs attribute — `nixpkgs = null` is the policy, not an
 absence, and it is enforced at eval time by `../checks/agents-eval.nix` rather than checked against
 a package set. See [`../lib/agents.nix`](../lib/agents.nix)'s header for the measurements behind
-that policy (all four tools exist in nixpkgs; all four lag the distro package, and all four ship
-their own updater that a read-only store path cannot run).
+that policy: these clients must remain mutable so their vendor update paths can work.
 
 If something in here turns out to matter in a different way, distil the actual finding into
 [`../studies/`](../studies/README.md) and let the experiment stay disposable (or delete it).

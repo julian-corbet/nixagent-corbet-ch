@@ -1,9 +1,9 @@
 # nixagent
 
-**Agentic AI clients — Claude Code, Claude Cowork, Gemini CLI, Codex, opencode, omp — declared per
-host, on the hosts that actually want them, and delivered by whichever of two mechanisms keeps the
-tool current: the distro's package manager, or the vendor's own installer. Never nixpkgs, because
-they update themselves.**
+**Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, Gemini CLI, Codex, opencode,
+omp — declared per host, on the hosts that actually want them, and delivered by whichever of two
+mechanisms keeps the tool current: the distro's package manager, or the vendor's own installer.
+Never nixpkgs, because they update themselves.**
 
 ## What this is
 
@@ -12,12 +12,12 @@ real command name and its vendor installer, plus **two modules for two delivery 
 
 **The distro plane** (`modules/nixagent.nix`, system-manager) resolves a selection into two lists a
 host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries) and `desktop`
-(Electron windows).
+(graphical applications).
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
 nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" "omp" ];
-nixagent.desktop = [ "claude-cowork-linux" ];
+nixagent.desktop = [ "chatgpt-desktop" "claude-desktop" ];
 
 nixarch.packages.pacman =
   config.nixagent.archPackages ++ config.nixagent.runtimeArchPackages;
@@ -202,9 +202,8 @@ rather than argued:
 > self-updates faster than nixpkgs tracks it? Yes → here, catalogued as `cli` or `desktop` by
 > whichever interface it actually has. No → whichever repo owns the thing it actually is.
 
-Whether the tool opens a terminal or a window is *not* the eligibility test — see
-[`studies/claude-cowork-is-a-desktop-app-not-a-cli.md`](studies/claude-cowork-is-a-desktop-app-not-a-cli.md)
-for why that clause was dropped from it.
+Whether the tool opens a terminal or a window is *not* the eligibility test. It only decides
+whether the selection belongs in `cli` or `desktop`.
 
 ## The AUR/pacman split, and why it is not the same answer on every host
 
@@ -213,11 +212,10 @@ converge with `target not found` and takes every unrelated package in the same l
 So `archPackages` and `aurPackages` are separate outputs, and that they never intersect is the
 load-bearing invariant `checks/` exists to hold.
 
-One entry makes this harder than it looks. `claude-code` is in **no upstream Arch repository** —
-archlinux.org's package search returns nothing for it — but it *is* in the AUR, and CachyOS's own
-repository carries it too. It resolves cleanly under `pacman -Si` on a CachyOS box, which is
-exactly the observation that would tempt you into `aur = false` and hand every plain Arch consumer
-a broken transaction.
+Several entries make this harder than it looks. `claude-code`, `claude-desktop`, and
+`chatgpt-desktop` are in no upstream Arch repository, but they are in the AUR and CachyOS carries
+repository builds. ChatGPT adds one more wrinkle: its AUR name is `chatgpt-desktop`, while the
+CachyOS package is `chatgpt-desktop-bin`.
 
 The two errors are not symmetric, so the design follows the asymmetry:
 
@@ -226,6 +224,8 @@ The two errors are not symmetric, so the design follows the asymmetry:
   nothing that did not need building.
 - `archRepoOn = [ "cachyos" ]` lifts it to the pacman list, but only on a distro whose own
   repository is known to carry it.
+- `archPackageOn.cachyos` records a different derivative package name when one exists; it never
+  changes the plain-Arch/AUR floor.
 - `nixagent.distro` defaults to `"arch"`, the recoverable answer, rather than to whichever distro
   the catalogue happened to be written on.
 
@@ -234,8 +234,8 @@ Write-up with the full evidence:
 
 ## Package name ≠ command name ≠ catalogue key
 
-Four of the six disagree, so `nixagent.binaries` publishes the mapping. Pointing an alias, a
-wrapper or a home-manager config at the *package* name gets you a command that does not exist.
+Package name, command, and catalogue key are separate identities, so `nixagent.binaries` publishes
+the mapping. Pointing a launcher at a package name is wrong for several entries.
 
 | Selection (catalogue key) | pacman package | command | vendor installer |
 |---|---|---|---|
@@ -244,7 +244,8 @@ wrapper or a home-manager config at the *package* name gets you a command that d
 | `openai-codex` | `openai-codex` | `codex` | `chatgpt.com/codex/install.sh` → `~/.local/bin/codex` |
 | `opencode` | `opencode` | `opencode` | `opencode.ai/install` → `~/.opencode/bin/opencode` |
 | `omp` | `oh-my-pi-bin` | `omp` | `omp.sh/install` → `~/.local/bin/omp` |
-| `claude-cowork-linux` | `claude-cowork-linux` | `claude-cowork` | — (third-party repackaging) |
+| `chatgpt-desktop` | Arch: `chatgpt-desktop`; CachyOS: `chatgpt-desktop-bin` | `chatgpt` | — (vendor Linux packages, no per-user installer script) |
+| `claude-desktop` | `claude-desktop` | `claude-desktop` | — (vendor Linux packages, no per-user installer script) |
 
 `omp` is the sharpest case and the reason the key is documented as naming the **tool**: the project
 calls itself `omp`, the AUR calls it `oh-my-pi-bin`, npm calls it `@oh-my-pi/pi-coding-agent`, and
@@ -323,8 +324,9 @@ has a matching option and contributes; `archPackages` and `aurPackages` never in
 distro setting; every selection lands on exactly one list; every entry still carries
 `nixpkgs = null`; every entry carries an `upstream` field whose `installs` is relative to `$HOME`
 and ends in that entry's own `binary`; catalogue keys are unique across groups; `claude-code` moves
-between the lists with `nixagent.distro` and is never on both; and `claude-cowork-linux` and `omp`
-— which carry no `archRepoOn` — stay on the AUR list on *every* distro setting.
+between the lists with `nixagent.distro` and is never on both; both desktop apps move from the AUR
+on plain Arch to CachyOS's repository; ChatGPT emits the correct different package name on each;
+and `omp` stays on the AUR list on every distro setting.
 
 **`home-eval`** evaluates `modules/home.nix` against a stub of the home-manager options it writes
 to, and asserts what it renders: one activation entry rather than one per tool, after
