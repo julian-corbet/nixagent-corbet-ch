@@ -86,8 +86,8 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 5, desktop: 2, total: 7)" =
-      lib.length archAll.selected == 7
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 7, desktop: 2, total: 9)" =
+      lib.length archAll.selected == 9
       && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
@@ -138,9 +138,13 @@ let
       && !(has cachyAll.aurPackages "chatgpt-desktop-bin")
       && !(has (cachyAll.archPackages ++ cachyAll.aurPackages) "chatgpt-desktop");
 
-    "repository lifts are scoped to their entries and leave only omp on the CachyOS AUR list" =
-      sorted cachyAll.aurPackages == [ "oh-my-pi-bin" ]
-      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "oh-my-pi-bin" ];
+    "repository lifts are scoped to their entries; grok-build and omp remain AUR on CachyOS" =
+      sorted cachyAll.aurPackages == [ "grok-build" "oh-my-pi-bin" ]
+      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "grok-build" "oh-my-pi-bin" ];
+
+    "grok-build is AUR on every distro and publishes its actual grok command" =
+      has archAll.aurPackages "grok-build" && has cachyAll.aurPackages "grok-build"
+      && archAll.binaries.grok-build == "grok";
 
     # omp is in no upstream Arch repository and in no derivative's repository either (all three of
     # `oh-my-pi-bin`, `oh-my-pi` and `omp` checked 2026-08-10 -- see its catalogue entry), so it
@@ -152,20 +156,22 @@ let
       && !(has (archAll.archPackages ++ archAll.aurPackages) "omp")
       && !(has (archAll.archPackages ++ archAll.aurPackages) "oh-my-pi");
 
-    "the three upstream-Arch entries stay on the pacman list regardless of distro -- their repository membership is not derivative-dependent" =
+    "the four upstream-Arch entries stay on the pacman list regardless of distro -- their repository membership is not derivative-dependent" =
       lib.all (n: has archAll.archPackages n && has cachyAll.archPackages n)
-        [ "gemini-cli" "openai-codex" "opencode" ];
+        [ "gemini-cli" "openai-codex" "opencode" "qwen-code" ];
 
     # ── Package name vs command name ──────────────────────────────────────────────────────────
-    # Three of the four disagree. A consumer aliasing, wrapping or launching by the PACKAGE name
+    # Several disagree. A consumer aliasing, wrapping or launching by the PACKAGE name
     # gets a command that does not exist, which is what `binaries` is published to prevent.
     "binaries maps every selection to its real command, not its package name" =
       archAll.binaries == {
         claude-code = "claude";
         gemini-cli = "gemini";
+        grok-build = "grok";
         openai-codex = "codex";
         opencode = "opencode";
         omp = "omp";
+        qwen-code = "qwen";
         chatgpt-desktop = "chatgpt";
         claude-desktop = "claude-desktop";
       };
@@ -340,11 +346,11 @@ let
     # This list GREW on 2026-08-11 and the assertion is here to make that visible when it happens:
     # openai-codex moved out of the null set because the 403 it was recorded on came from a URL the
     # vendor never used. Updating this line is the moment to write down what was actually probed.
-    "exactly the researched entries carry a vendor installer -- the two desktop apps and gemini-cli carry recorded nulls" =
+    "exactly the researched entries carry a vendor installer -- only the two desktop apps and gemini-cli carry recorded nulls" =
       sorted
         (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
           (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))
-      == [ "claude-code" "omp" "openai-codex" "opencode" ];
+      == [ "claude-code" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
 
     # codex is the ONLY entry whose interactive prompt is suppressed by an environment variable
     # instead of a flag, and losing it turns a `home-manager switch` typed at a terminal into a
@@ -356,9 +362,11 @@ let
     # The measured fact behind `needsDynamicLoader = false`, pinned separately from the field-shape
     # assertion above: codex ships musl-static, so flagging it would demand nix-ld on hosts that
     # can run it bare. If a future release starts shipping a glibc build this must flip WITH it.
-    "codex is the one installer that needs no dynamic loader -- static-PIE musl, no INTERP segment" =
+    "codex and grok need no dynamic loader -- both are static PIEs with no INTERP segment" =
       cat.cli.openai-codex.upstream.needsDynamicLoader == false
-      && lib.all (n: cat.cli.${n}.upstream.needsDynamicLoader == true) [ "claude-code" "opencode" "omp" ];
+      && cat.cli.grok-build.upstream.needsDynamicLoader == false
+      && lib.all (n: cat.cli.${n}.upstream.needsDynamicLoader == true)
+        [ "claude-code" "opencode" "omp" "qwen-code" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

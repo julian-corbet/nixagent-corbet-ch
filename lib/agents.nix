@@ -42,10 +42,11 @@
 # addition that names a real nixpkgs attribute fails `nix flake check` rather than quietly opening
 # the door this repo was drawn to keep shut.
 #
-# nixpkgs really does carry four of the five CLIs. Force-evaluated -- not `hasAttrByPath` alone,
-# which cannot tell a live attribute from a rename-to-throw. Re-measured 2026-08-11 against
-# nixpkgs-unstable HEAD d482ef84, with each project's own release feed and the Arch package API
-# alongside, because the ONLY honest version of this table is one with all three columns:
+# nixpkgs really does carry six of the seven CLIs. Force-evaluated -- not `hasAttrByPath` alone,
+# which cannot tell a live attribute from a rename-to-throw. The original five were measured
+# 2026-08-11 against nixpkgs-unstable HEAD d482ef84; the Grok and Qwen rows were measured
+# 2026-09-04. Each uses its project's release feed and the Arch package API alongside, because
+# the ONLY honest version of this table is one with all three columns:
 #
 #                     nixpkgs-unstable   Arch/AUR            upstream
 #     claude-code     2.1.226            2.1.222 (cachyos)   2.1.226
@@ -53,6 +54,8 @@
 #     codex           0.147.0            0.146.1 (extra)     0.147.0
 #     gemini-cli      0.47.0             1:0.50.0 (extra)    0.54.4
 #     omp             -- absent --       17.2.2 (AUR, flagged out of date)   17.2.12
+#     grok-build      1.0.5              1.0.13 (AUR)        1.0.13
+#     qwen-code       0.16.0             0.21.2 (extra)      0.23.0
 #
 # READ THAT TABLE HONESTLY: nixpkgs is not uniformly behind. It is AHEAD of Arch for codex and for
 # claude-code, level for opencode's packaging lag, and catastrophically behind only for gemini-cli
@@ -367,6 +370,44 @@
       '';
     };
 
+    grok-build = {
+      # The PRODUCT is Grok Build, the package is `grok-build`, and the command is `grok`.
+      # Verified 2026-09-04 against all three package sources used for this catalogue:
+      #
+      #   archlinux.org package search  -> 0 results for grok, grok-build and grok-cli.
+      #   AUR RPC                       -> grok-build 1.0.13-1, matching x.ai/cli/stable.
+      #   `pacman -Si` on CachyOS       -> no repository package under any of those names.
+      #
+      # The AUR package downloads the same versioned binary as the vendor installer and places it
+      # at /usr/bin/grok. It is therefore the correct distro-plane floor on both Arch variants.
+      arch = "grok-build";
+      binary = "grok";
+      nixpkgs = null;
+      aur = true;
+
+      # SpaceXAI's documented installer. Its default layout is ~/.grok/downloads for versioned
+      # artifacts with ~/.grok/bin/grok pointing at the active one; `grok update` uses the same
+      # channel-aware layout afterwards. The installer normally offers to append ~/.grok/bin to a
+      # shell rc, but modules/home.nix prepends the catalogue-derived install prefix to PATH before
+      # invoking it, so its own `path_has_dir` gate leaves generated shell files alone.
+      upstream = {
+        url = "https://x.ai/cli/install.sh";
+        runner = "bash";
+        args = [ ];
+        installs = ".grok/bin/grok";
+
+        # Official stable 1.0.13 linux-x86_64 artifact, inspected 2026-09-04: ELF PIE with no
+        # PT_INTERP (`file`: "static-pie linked"). It starts on NixOS without the FHS loader.
+        needsDynamicLoader = false;
+      };
+
+      note = ''
+        SpaceXAI's terminal coding agent and TUI (github.com/xai-org/grok-build). Catalogue and
+        package key `grok-build`; command `grok`. It supports interactive, headless and ACP modes,
+        plus AGENTS.md, skills, plugins, hooks, MCP servers and subagents.
+      '';
+    };
+
     openai-codex = {
       arch = "openai-codex";
       binary = "codex";
@@ -505,8 +546,7 @@
         make it an inference engine, exactly as a browser is not a web server.
 
         Official upstream Arch `extra` (verified 2026-08-07). Package name, command name and
-        project name all agree, which is worth noting only because three of the four entries here
-        do not.
+        project name all agree, which is worth noting only because several entries here do not.
       '';
     };
 
@@ -606,6 +646,41 @@
 
         A client by the placement rule, same as `opencode`: it drives whichever remote provider it
         is configured for and loads no weights of its own.
+      '';
+    };
+
+    qwen-code = {
+      arch = "qwen-code";
+      binary = "qwen";
+      nixpkgs = null;
+
+      # Official upstream Arch `extra`, verified 2026-09-04 through archlinux.org's package API.
+      # CachyOS exposes its rebuilt copy from cachyos-extra-v3 as well as the upstream extra entry,
+      # so this remains a pacman name on both supported distro answers. The separate AUR
+      # `qwen-code-bin` is newer today, but an official repository entry does not belong on the AUR
+      # side of an atomic reconcile merely because the release race currently favours it.
+      upstream = {
+        url = "https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh";
+        runner = "bash";
+
+        # Force the vendor's standalone archive rather than its npm fallback: the archive bundles
+        # its private Node runtime and has a deterministic ~/.local layout. `--no-modify-path`
+        # prevents the installer appending a block to a home-manager-generated shell rc; PATH is
+        # published declaratively by modules/home.nix from `installs` below.
+        args = [ "--method" "standalone" "--no-modify-path" ];
+        installs = ".local/bin/qwen";
+
+        # The launcher is a shell wrapper around the bundled Linux Node runtime. Inspected from
+        # Qwen's v0.23.0 linux-x64 archive on 2026-09-04: that Node executable declares
+        # `INTERP /lib64/ld-linux-x86-64.so.2`, so the complete command needs the FHS loader even
+        # though the probe path itself begins with a shebang.
+        needsDynamicLoader = true;
+      };
+
+      note = ''
+        Qwen's model-flexible terminal coding agent (github.com/QwenLM/qwen-code). Package and
+        catalogue key `qwen-code`; command `qwen`. The upstream plane uses Qwen's official
+        standalone-first installer rather than inventing a global npm prefix.
       '';
     };
   };

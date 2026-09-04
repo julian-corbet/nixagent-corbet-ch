@@ -1,7 +1,7 @@
 # nixagent
 
-**Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, Gemini CLI, Codex, opencode,
-omp — declared per host, on the hosts that actually want them, and delivered by whichever of two
+**Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, Gemini CLI, Grok Build,
+Qwen Code, Codex, opencode and omp — declared per host and delivered by whichever of two
 mechanisms keeps the tool current: the distro's package manager, or the vendor's own installer.
 Never nixpkgs, because they update themselves.**
 
@@ -16,7 +16,7 @@ host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
-nixagent.cli = [ "claude-code" "gemini-cli" "openai-codex" "opencode" "omp" ];
+nixagent.cli = [ "claude-code" "gemini-cli" "grok-build" "openai-codex" "opencode" "omp" "qwen-code" ];
 nixagent.desktop = [ "chatgpt-desktop" "claude-desktop" ];
 
 nixarch.packages.pacman =
@@ -30,7 +30,8 @@ tools at all — *given the host requirement below* — and how any host gets on
 has fallen behind.
 
 ```nix
-nixagent.home.upstream = [ "claude-code" "omp" ];   # claude-code | omp | openai-codex | opencode
+nixagent.home.upstream = [ "claude-code" "grok-build" "qwen-code" ];
+# Selectable: claude-code | grok-build | omp | openai-codex | opencode | qwen-code
 ```
 
 That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
@@ -56,8 +57,10 @@ not a second reason — and treating it as one has already gone wrong here once.
 | `openai-codex` | 0.147.0 | 0.146.1 (`extra`) | 0.147.0 |
 | `gemini-cli` | 0.47.0 | 1:0.50.0 (`extra`) | 0.54.4 |
 | `omp` | *absent* | 17.2.2 (AUR, flagged out of date) | 17.2.12 |
+| `grok-build` | 1.0.5 | 1.0.13 (AUR) | 1.0.13 |
+| `qwen-code` | 0.16.0 | 0.21.2 (`extra`) | 0.23.0 |
 
-Read that honestly: nixpkgs is **ahead** of Arch for two of the five and level for a third. An
+Read the original five honestly: nixpkgs is **ahead** of Arch for two and level for a third. An
 earlier revision of this README claimed every entry was behind its distro package. That was true of
 the snapshot it was taken from and is false now — which is exactly why the rule does not rest on it.
 Freshness changes hands week to week; immutability does not.
@@ -134,7 +137,7 @@ exactly where it was. Full write-up:
 
 ### Host requirement: a dynamic loader for foreign binaries
 
-Three of the four catalogued installers deliver an **x86-64 glibc executable** declaring
+Four of the six catalogued installers deliver an **x86-64 glibc executable** declaring
 `INTERP /lib64/ld-linux-x86-64.so.2`, a path NixOS does not have.
 
 So on NixOS the upstream plane needs `programs.nix-ld`, and needs it *configured*, not merely
@@ -155,9 +158,10 @@ selects the glibc artifact on exactly the hosts that cannot run it.
 **It is per entry, and `openai-codex` is why.** The catalogue field is `needsDynamicLoader` — named
 after the host requirement, not after the artifact, because codex ships the *largest* native binary
 here (a 258 MB Rust executable) and needs no loader at all: every Linux asset is
-`x86_64-unknown-linux-musl`, and its program headers carry no `INTERP` segment, so it is a static
-PIE that starts on a bare NixOS host. Flagging it by "is this a native binary" would have imposed a
-prerequisite it does not have and refused installs that would have worked.
+`x86_64-unknown-linux-musl`, and its program headers carry no `INTERP` segment. Grok Build's
+released Linux binary is static PIE too. Both start on bare NixOS. Flagging either by "is this a
+native binary" would have imposed a prerequisite it does not have and refused installs that would
+have worked.
 
 ### How idempotency and failure work
 

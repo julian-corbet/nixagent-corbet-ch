@@ -45,6 +45,7 @@ let
   noPath = evalWith { upstream = [ "claude-code" ]; addToPath = false; };
   tuned = evalWith { upstream = [ "omp" ]; connectTimeoutSeconds = 3; maxTimeSeconds = 42; };
   codexOnly = evalWith { upstream = [ "openai-codex" ]; };
+  newHarnesses = evalWith { upstream = [ "grok-build" "qwen-code" ]; };
 
   script = c: c.home.activation.nixagentUpstream.data;
   contains = needle: hay: lib.hasInfix needle hay;
@@ -129,6 +130,17 @@ let
     "opencode is invoked with --no-modify-path, so the installer does not append PATH lines to a home-manager-generated shell rc" =
       contains "-- '--no-modify-path'" (script allThree);
 
+    "grok uses SpaceXAI's installer and its own mutable prefix, with no version pin" =
+      contains "--name 'grok-build'" (script newHarnesses)
+      && contains "--url 'https://x.ai/cli/install.sh' --runner 'bash'" (script newHarnesses)
+      && contains "--probe '.grok/bin/grok'" (script newHarnesses)
+      && !(contains " -- " (lib.head (callLines newHarnesses)));
+
+    "qwen forces the standalone archive and leaves PATH ownership to home-manager" =
+      contains "--name 'qwen-code'" (script newHarnesses)
+      && contains "--probe '.local/bin/qwen'" (script newHarnesses)
+      && contains "-- '--method' 'standalone' '--no-modify-path'" (script newHarnesses);
+
     "claude-code passes no installer flags -- its installer defaults to the latest release, which is what an unpinned delivery mode wants" =
       let calls = lib.filter (l: contains "--name 'claude-code'" l) (callLines allThree);
       in lib.length calls == 1 && !(contains " -- " (lib.head calls));
@@ -142,6 +154,11 @@ let
     "the loader flag is per-entry: emitted for the three glibc installers, absent for codex" =
       lib.all (l: contains "--needs-dynamic-loader" l) (callLines allThree)
       && !(contains "--needs-dynamic-loader" (lib.head (callLines codexOnly)));
+
+    "qwen's bundled Node needs the dynamic loader while grok's static PIE does not" =
+      let calls = callLines newHarnesses; in
+      !(contains "--needs-dynamic-loader" (lib.head calls))
+      && contains "--needs-dynamic-loader" (lib.elemAt calls 1);
 
     # codex's installer has no --no-modify-path equivalent and prompts unless this variable is set.
     # Rendered as one quoted shell word: `--env 'NAME=VALUE'`, not two arguments.
@@ -211,6 +228,17 @@ let
         opencode = "opencode";
       };
 
+    "the new harness paths and command names are published without confusing package keys for binaries" =
+      newHarnesses.nixagent.home.paths == {
+        grok-build = "/home/tester/.grok/bin/grok";
+        qwen-code = "/home/tester/.local/bin/qwen";
+      }
+      && newHarnesses.nixagent.home.binaries == {
+        grok-build = "grok";
+        qwen-code = "qwen";
+      }
+      && newHarnesses.home.sessionPath == [ "/home/tester/.grok/bin" "/home/tester/.local/bin" ];
+
     # ── The type is the documentation ─────────────────────────────────────────────────────────
     # An entry with `upstream = null` has no vendor installer (each records what was checked).
     # Selecting one must be an EVAL error, not an activation that fetches nothing: `deepSeq`
@@ -231,7 +259,7 @@ let
       && codexOnly.nixagent.home.binaries == { openai-codex = "codex"; };
 
     "the selectable set is DERIVED from the catalogue, not hand-listed here or in the module" =
-      sortedList installableNames == [ "claude-code" "omp" "openai-codex" "opencode" ];
+      sortedList installableNames == [ "claude-code" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

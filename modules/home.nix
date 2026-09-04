@@ -214,8 +214,8 @@ in
         a delivered tool -- half the contract this module states.
 
         The directories come from the catalogue (`upstream.installs`), so they are whatever each
-        VENDOR chose: `~/.local/bin` for claude-code, codex and omp, `~/.opencode/bin` for
-        opencode. Duplicates collapse.
+        VENDOR chose: `~/.local/bin` for claude-code, codex, omp and Qwen Code,
+        `~/.opencode/bin` for opencode, and `~/.grok/bin` for Grok Build. Duplicates collapse.
 
         Turn it off only if the PATH is managed somewhere else, and know what it costs: every one
         of these installers wants to put its own directory on PATH by editing a shell rc file, and
