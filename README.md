@@ -1,7 +1,7 @@
 # nixagent
 
 **Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, DeepSeek Harness, Gemini CLI,
-Grok Build, Qwen Code, Codex, opencode and omp — declared per host and delivered by whichever of two
+Grok Build, Muse Code, Qwen Code, Codex, opencode and omp — declared per host and delivered by whichever of two
 planes keeps the tool current: the distro's package manager, or the vendor's own mutable delivery.
 Never nixpkgs, because they update themselves.**
 
@@ -16,7 +16,7 @@ host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
-nixagent.cli = [ "claude-code" "deepseek-harness" "gemini-cli" "grok-build" "openai-codex" "opencode" "omp" "qwen-code" ];
+nixagent.cli = [ "claude-code" "deepseek-harness" "gemini-cli" "grok-build" "muse-code" "openai-codex" "opencode" "omp" "qwen-code" ];
 nixagent.desktop = [ "chatgpt-desktop" "claude-desktop" ];
 
 nixarch.packages.pacman =
@@ -31,8 +31,8 @@ tools at all — *given the host requirement below* — and how any host gets on
 has fallen behind.
 
 ```nix
-nixagent.home.upstream = [ "claude-code" "deepseek-harness" "grok-build" "qwen-code" ];
-# Selectable: claude-code | deepseek-harness | grok-build | omp | openai-codex | opencode | qwen-code
+nixagent.home.upstream = [ "claude-code" "deepseek-harness" "grok-build" "muse-code" "qwen-code" ];
+# Selectable: claude-code | deepseek-harness | grok-build | muse-code | omp | openai-codex | opencode | qwen-code
 ```
 
 That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
@@ -61,6 +61,7 @@ not a second reason — and treating it as one has already gone wrong here once.
 | `grok-build` | 1.0.5 | 1.0.13 (AUR) | 1.0.13 |
 | `qwen-code` | 0.16.0 | 0.21.2 (`extra`) | 0.23.0 |
 | `deepseek-harness` | *absent* | 0.1.2rc.1 (AUR) | 0.1.2-rc.1 |
+| `muse-code` | *absent* | 1.0.1.r2006.1 (AUR) | 1.0.1-R2006.1 |
 
 Read the original five honestly: nixpkgs is **ahead** of Arch for two and level for a third. An
 earlier revision of this README claimed every entry was behind its distro package. That was true of
@@ -251,6 +252,7 @@ the mapping. Pointing a launcher at a package name is wrong for several entries.
 | `deepseek-harness` | `deepseek-harness-bin` | `dsh` | `npx @deepseek-ai/dsh` via `~/.local/bin/dsh` dispatcher |
 | `gemini-cli` | `gemini-cli` | `gemini` | — (npm/Node only; no installer, and no Linux release asset in any of the last 15 releases) |
 | `grok-build` | `grok-build` | `grok` | `x.ai/cli/install.sh` → `~/.grok/bin/grok` |
+| `muse-code` | `muse-code-bin` | `muse` | `dev.meta.ai/install.sh` → `~/.local/bin/muse` |
 | `openai-codex` | `openai-codex` | `codex` | `chatgpt.com/codex/install.sh` → `~/.local/bin/codex` |
 | `opencode` | `opencode` | `opencode` | `opencode.ai/install` → `~/.opencode/bin/opencode` |
 | `omp` | `oh-my-pi-bin` | `omp` | `omp.sh/install` → `~/.local/bin/omp` |

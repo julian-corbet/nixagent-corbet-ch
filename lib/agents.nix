@@ -45,7 +45,9 @@
 # nixpkgs really does carry six of the eight CLIs. Force-evaluated -- not `hasAttrByPath` alone,
 # which cannot tell a live attribute from a rename-to-throw. The original five were measured
 # 2026-08-11 against nixpkgs-unstable HEAD d482ef84; the Grok and Qwen rows were measured
-# 2026-09-04. Each uses its project's release feed and the Arch package API alongside, because
+# 2026-09-04, the muse row the same day via pkgs/by-name (no muse-code entry; `muse` there is
+# the unrelated MuSE audio sequencer, as on Arch). Each uses its project's release feed and the
+# Arch package API alongside, because
 # the ONLY honest version of this table is one with all three columns:
 #
 #                     nixpkgs-unstable   Arch/AUR            upstream
@@ -57,6 +59,7 @@
 #     grok-build      1.0.5              1.0.13 (AUR)        1.0.13
 #     qwen-code       0.16.0             0.21.2 (extra)      0.23.0
 #     deepseek-harness -- absent --       0.1.2rc.1 (AUR)     0.1.2-rc.1
+#     muse-code       -- absent --       1.0.1.r2006.1 (AUR) 1.0.1-R2006.1
 #
 # READ THAT TABLE HONESTLY: nixpkgs is not uniformly behind. It is AHEAD of Arch for codex and for
 # claude-code, level for opencode's packaging lag, and catastrophically behind only for gemini-cli
@@ -467,6 +470,58 @@
         SpaceXAI's terminal coding agent and TUI (github.com/xai-org/grok-build). Catalogue and
         package key `grok-build`; command `grok`. It supports interactive, headless and ACP modes,
         plus AGENTS.md, skills, plugins, hooks, MCP servers and subagents.
+      '';
+    };
+
+    muse-code = {
+      # Meta's terminal coding agent, powered by Muse Spark. Verified 2026-09-04 against the
+      # same three package sources as every distro-plane entry:
+      #
+      #   archlinux.org package search  -> 0 results for muse-code. (`muse` in extra is the
+      #                                    unrelated MuSE audio sequencer, 4.2.1.)
+      #   AUR RPC                       -> muse-code-bin 1.0.1.r2006.1-1, current with upstream
+      #                                    1.0.1-R2006.1 (checked via the release asset's own
+      #                                    `--version`). Provides muse-code/musecode/muse-bin/
+      #                                    musecode-bin; conflicts with the bare names.
+      #   `pacman -Si` on CachyOS       -> neither muse-code nor muse-code-bin in any configured
+      #                                    repository, so no derivative lift applies.
+      #
+      # The `-bin` package is the right floor: it consumes Meta's published release binary from
+      # lookaside.facebook.com rather than rebuilding anything.
+      arch = "muse-code-bin";
+      binary = "muse";
+      nixpkgs = null;
+      aur = true;
+
+      # Meta's documented installer. Default layout is ~/.local/bin/muse (overridable via
+      # MUSE_INSTALL_DIR); the script downloads the launcher to a file first, checks it with
+      # `bash -n` plus the advertised sha256, then runs it with MUSE_LAUNCHER_INSTALL=1 --
+      # never `curl | sh`, which is also why this plane can trust it. `installs` records the
+      # launcher path, which is the idempotency probe and the PATH entry alike.
+      #
+      # MUSE_NO_MODIFY_PATH arrives via `env`, not `args`: the installer honours no flag for
+      # this, and without it the script appends a PATH export to a home-manager-generated shell
+      # rc -- the same reason opencode takes `--no-modify-path` and qwen takes its own.
+      upstream = {
+        kind = "installer";
+        url = "https://dev.meta.ai/install.sh";
+        runner = "bash";
+        args = [ ];
+        env = { MUSE_NO_MODIFY_PATH = "1"; };
+        installs = ".local/bin/muse";
+
+        # Release asset muse-x86-linux 1.0.1-R2006.1, inspected 2026-09-04: ELF 64-bit LSB
+        # executable, statically linked. It starts on NixOS without the FHS loader, like codex
+        # and grok-build -- flagging it would demand nix-ld on hosts that run it bare.
+        needsDynamicLoader = false;
+      };
+
+      note = ''
+        Meta's terminal coding agent (dev.meta.ai), powered by Muse Spark. Catalogue key
+        `muse-code`; AUR package `muse-code-bin`; command `muse` (not muse-code -- the top
+        cause of a false command-not-found). Interactive TUI plus `exec` headless mode,
+        parallel subagents, skills, MCP servers, and an OS sandbox that stays on unless
+        `--yolo` is passed.
       '';
     };
 

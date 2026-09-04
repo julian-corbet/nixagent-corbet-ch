@@ -47,6 +47,7 @@ let
   codexOnly = evalWith { upstream = [ "openai-codex" ]; };
   deepseekOnly = evalWith { upstream = [ "deepseek-harness" ]; };
   newHarnesses = evalWith { upstream = [ "grok-build" "qwen-code" ]; };
+  museOnly = evalWith { upstream = [ "muse-code" ]; };
 
   script = c: c.home.activation.nixagentUpstream.data;
   contains = needle: hay: lib.hasInfix needle hay;
@@ -208,6 +209,17 @@ let
       && contains "--name 'openai-codex'" (script codexOnly)
       && !(contains " -- " (lib.head (callLines codexOnly)));
 
+    "muse renders its identity: dev.meta.ai installer, probe .local/bin/muse, command muse, no flags, no loader" =
+      contains "--name 'muse-code'" (script museOnly)
+      && contains "--url 'https://dev.meta.ai/install.sh' --runner 'bash'" (script museOnly)
+      && contains "--probe '.local/bin/muse'" (script museOnly)
+      && contains "--command 'muse'" (script museOnly)
+      && !(contains " -- " (lib.head (callLines museOnly)))
+      && !(contains "--needs-dynamic-loader" (lib.head (callLines museOnly)));
+
+    "muse renders its no-modify-path env var as a single quoted word, like codex's own" =
+      lib.all (l: contains "--env 'MUSE_NO_MODIFY_PATH=1'" l) (callLines museOnly);
+
     # ── Failure mode and timeouts reach the script ────────────────────────────────────────────
     "the default failure mode is abort -- a switch that goes green without the command is the failure this plane exists to refuse" =
       contains "--on-failure 'abort'" (script claudeOnly)
@@ -289,7 +301,7 @@ let
       && codexOnly.nixagent.home.binaries == { openai-codex = "codex"; };
 
     "the selectable set is DERIVED from the catalogue, not hand-listed here or in the module" =
-      sortedList installableNames == [ "claude-code" "deepseek-harness" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
+      sortedList installableNames == [ "claude-code" "deepseek-harness" "grok-build" "muse-code" "omp" "openai-codex" "opencode" "qwen-code" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

@@ -87,8 +87,8 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 8, desktop: 2, total: 10)" =
-      lib.length archAll.selected == 10
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 9, desktop: 2, total: 11)" =
+      lib.length archAll.selected == 11
       && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
@@ -139,9 +139,9 @@ let
       && !(has cachyAll.aurPackages "chatgpt-desktop-bin")
       && !(has (cachyAll.archPackages ++ cachyAll.aurPackages) "chatgpt-desktop");
 
-    "repository lifts are scoped to their entries; DeepSeek Harness, grok-build and omp remain AUR on CachyOS" =
-      sorted cachyAll.aurPackages == [ "deepseek-harness-bin" "grok-build" "oh-my-pi-bin" ]
-      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "deepseek-harness-bin" "grok-build" "oh-my-pi-bin" ];
+    "repository lifts are scoped to their entries; DeepSeek Harness, grok-build, muse-code and omp remain AUR on CachyOS" =
+      sorted cachyAll.aurPackages == [ "deepseek-harness-bin" "grok-build" "muse-code-bin" "oh-my-pi-bin" ]
+      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "deepseek-harness-bin" "grok-build" "muse-code-bin" "oh-my-pi-bin" ];
 
     "DeepSeek Harness uses the current AUR binary package on both distros and publishes dsh, not its package name" =
       has archAll.aurPackages "deepseek-harness-bin"
@@ -151,6 +151,13 @@ let
     "grok-build is AUR on every distro and publishes its actual grok command" =
       has archAll.aurPackages "grok-build" && has cachyAll.aurPackages "grok-build"
       && archAll.binaries.grok-build == "grok";
+
+    "muse-code is AUR on every distro under its PACKAGE name, and publishes the muse command" =
+      has archAll.aurPackages "muse-code-bin" && has cachyAll.aurPackages "muse-code-bin"
+      && !(has archAll.archPackages "muse-code-bin") && !(has cachyAll.archPackages "muse-code-bin")
+      && !(has (archAll.archPackages ++ archAll.aurPackages) "muse-code")
+      && archAll.binaries.muse-code == "muse"
+      && cat.cli.muse-code.arch == "muse-code-bin";
 
     # omp is in no upstream Arch repository and in no derivative's repository either (all three of
     # `oh-my-pi-bin`, `oh-my-pi` and `omp` checked 2026-08-10 -- see its catalogue entry), so it
@@ -175,6 +182,7 @@ let
         deepseek-harness = "dsh";
         gemini-cli = "gemini";
         grok-build = "grok";
+        muse-code = "muse";
         openai-codex = "codex";
         opencode = "opencode";
         omp = "omp";
@@ -376,21 +384,27 @@ let
       sorted
         (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
           (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))
-      == [ "claude-code" "deepseek-harness" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
+      == [ "claude-code" "deepseek-harness" "grok-build" "muse-code" "omp" "openai-codex" "opencode" "qwen-code" ];
 
-    # codex is the ONLY entry whose interactive prompt is suppressed by an environment variable
+    # codex was the first entry whose installer is steered by an environment variable
     # instead of a flag, and losing it turns a `home-manager switch` typed at a terminal into a
     # blocked activation waiting on "Start Codex now? [y/N]". Pinned at the value the vendor's own
-    # updater uses, not at "some truthy string".
+    # updater uses, not at "some truthy string". muse-code is the second: without
+    # MUSE_NO_MODIFY_PATH the installer appends a PATH export to a home-manager-generated rc.
     "codex carries the non-interactive env var its own installer gates every prompt on" =
       cat.cli.openai-codex.upstream.env == { CODEX_NON_INTERACTIVE = "1"; };
+
+    "muse-code carries the no-modify-path env var its installer honours instead of a flag" =
+      cat.cli.muse-code.upstream.env == { MUSE_NO_MODIFY_PATH = "1"; };
 
     # The measured fact behind `needsDynamicLoader = false`, pinned separately from the field-shape
     # assertion above: codex ships musl-static, so flagging it would demand nix-ld on hosts that
     # can run it bare. If a future release starts shipping a glibc build this must flip WITH it.
-    "codex and grok need no dynamic loader; DeepSeek's npx dispatcher uses the declared Nix runtime" =
+    # muse-code is the same shape: a statically linked binary, verified with `file`.
+    "codex, grok and muse need no dynamic loader; DeepSeek's npx dispatcher uses the declared Nix runtime" =
       cat.cli.openai-codex.upstream.needsDynamicLoader == false
       && cat.cli.grok-build.upstream.needsDynamicLoader == false
+      && cat.cli.muse-code.upstream.needsDynamicLoader == false
       && cat.cli.deepseek-harness.upstream.needsDynamicLoader == false
       && lib.all (n: cat.cli.${n}.upstream.needsDynamicLoader == true)
         [ "claude-code" "opencode" "omp" "qwen-code" ];
