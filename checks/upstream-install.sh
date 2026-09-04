@@ -116,6 +116,16 @@ expect_curl_calls() {
   fi
 }
 
+expect_npx_calls() {
+  local actual
+  actual="$(wc -l <"$CASEDIR/npx-calls" | tr -d ' ')"
+  if [ "$actual" = "$1" ]; then
+    ok "$CASE: npx was invoked $1 time(s)"
+  else
+    bad "$CASE: expected npx to be invoked $1 time(s), it was invoked $actual"
+  fi
+}
+
 # A fresh $HOME and a fresh curl counter per case, so no case can pass on another's leftovers. A
 # second argument names an EARLIER case whose home to reuse, which is how the idempotency case gets
 # a home that already has the tool in it.
@@ -129,8 +139,11 @@ new_case() {
   fi
   export HOME="$CASEDIR/home"
   : >"$CASEDIR/curl-calls"
+  : >"$CASEDIR/npx-calls"
   export FAKE_CURL_COUNT="$CASEDIR/curl-calls"
   export FAKE_CURL_EXIT=0
+  export FAKE_NPX_COUNT="$CASEDIR/npx-calls"
+  export FAKE_NPX_EXIT=0
   printf '\n== %s\n' "$1"
 }
 
@@ -143,6 +156,17 @@ run_install() {
     --probe .local/bin/tool \
     --url https://example.invalid/install.sh \
     --runner bash \
+    "$@" \
+    >"$CASEDIR/stdout" 2>"$CASEDIR/stderr" || status=$?
+}
+
+run_npx_install() {
+  status=0
+  nixagent_install_npx \
+    --name deepseek-harness \
+    --command dsh \
+    --probe .local/bin/dsh \
+    --package @deepseek-ai/dsh \
     "$@" \
     >"$CASEDIR/stdout" 2>"$CASEDIR/stderr" || status=$?
 }
@@ -178,6 +202,28 @@ fi
 cp "$FAKE_PAYLOAD" "$out"
 FAKECURL
 chmod +x "$WORK/fakebin/curl"
+
+# npx is a delivery program rather than a network detail here, so stub it separately. It records
+# the package and forwarded arguments exactly as the generated dispatcher presents them.
+printf '#!%s\n' "$TEST_SH" >"$WORK/fakebin/npx"
+cat >>"$WORK/fakebin/npx" <<'FAKENPX'
+set -u
+printf 'npx' >>"$FAKE_NPX_COUNT"
+printf ' %s' "$@" >>"$FAKE_NPX_COUNT"
+printf '\n' >>"$FAKE_NPX_COUNT"
+if [ "${FAKE_NPX_EXIT:-0}" != "0" ]; then
+  echo "npm error: simulated package resolution failure" >&2
+  exit "${FAKE_NPX_EXIT}"
+fi
+echo "0.1.2-rc.1"
+FAKENPX
+chmod +x "$WORK/fakebin/npx"
+
+# The real npx is a Node launcher. The delivery preflight checks both names separately so a NixOS
+# activation missing only Node says so directly; the behavior harness needs the matching stub even
+# though its fake npx is a shell script.
+printf '#!%s\nexit 0\n' "$TEST_SH" >"$WORK/fakebin/node"
+chmod +x "$WORK/fakebin/node"
 PATH="$WORK/fakebin:$PATH"
 export PATH
 
@@ -416,6 +462,43 @@ nixagent_install_upstream \
 expect_status 2 "$status"
 expect_contains stderr "expects NAME=VALUE"
 expect_curl_calls 0
+
+# ── 16. npx delivery writes an unversioned dispatcher and verifies the official package ─────
+new_case npx-dispatcher-installs
+run_npx_install --max-time 42
+expect_status 0 "$status"
+expect_npx_calls 1
+expect_file "$HOME/.local/bin/dsh"
+expect_contains stdout "creating dispatcher for npx @deepseek-ai/dsh"
+expect_contains stdout "installed and verified"
+expect_contains home/.local/bin/dsh 'exec npx --yes @deepseek-ai/dsh "$@"'
+
+# The dispatcher's purpose is argument transparency, so verify from the receiving program rather
+# than by reading only the generated text.
+"$HOME/.local/bin/dsh" web --no-open >/dev/null
+expect_npx_calls 2
+expect_contains npx-calls "npx --yes @deepseek-ai/dsh web --no-open"
+
+# ── 17. an existing dispatcher is the whole idempotency cost ─────────────────────────────────
+new_case npx-dispatcher-idempotent npx-dispatcher-installs
+export FAKE_NPX_EXIT=9
+run_npx_install
+expect_status 0 "$status"
+expect_npx_calls 0
+expect_empty stdout
+expect_empty stderr
+expect_file "$HOME/.local/bin/dsh"
+
+# ── 18. a package that cannot resolve leaves no absorbing executable behind ─────────────────
+new_case npx-resolution-failure
+export FAKE_NPX_EXIT=7
+run_npx_install
+expect_status 1 "$status"
+expect_npx_calls 1
+expect_contains stderr "npx delivery did not complete"
+expect_contains stderr "stage:     verify"
+expect_contains stderr "simulated package resolution failure"
+expect_no_file "$HOME/.local/bin/dsh"
 
 printf '\n%s check(s), %s failure(s)\n' "$checks" "$failures"
 if [ "$failures" -ne 0 ]; then

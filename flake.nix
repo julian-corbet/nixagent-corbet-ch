@@ -1,5 +1,5 @@
 {
-  description = "nixagent — agentic AI clients (Claude, Codex, Gemini, Grok Build, Qwen Code, opencode, omp, and desktop clients), declared per host and installed from pacman/AUR or the vendor's own installer, never nixpkgs";
+  description = "nixagent — agentic AI clients (Claude, Codex, DeepSeek Harness, Gemini, Grok Build, Qwen Code, opencode, omp, and desktop clients), declared per host and delivered from pacman/AUR or the vendor's own mutable path, never nixpkgs";
 
   # NO INPUTS FOR CONSUMERS, same reasoning nixmsg and nixdev state for themselves: this flake is
   # options plus a catalogue, taking `pkgs`/`config`/`lib` from whichever evaluation composes it,
@@ -33,9 +33,9 @@
       # See modules/cfetch.nix's header for the full boundary argument.
       systemManagerModules.cfetch = ./modules/cfetch.nix;
 
-      # Home-manager: the UPSTREAM delivery mode. Runs each selected tool's own vendor installer
-      # into that vendor's own per-user prefix, once, and puts it on PATH -- nix ensures the tool
-      # exists and never owns it. This is how a NixOS host gets these tools, and how ANY host gets
+      # Home-manager: the UPSTREAM delivery mode. Uses each selected tool's vendor-supported
+      # mutable path (shell installer or the documented npx dispatch) and puts it on PATH -- nix
+      # ensures the command exists and never owns the client payload. This is how a NixOS host gets these tools, and how ANY host gets
       # one whose distro package has fallen behind (measured: the AUR carried omp 17.2.2/17.2.3
       # against an upstream 17.2.12 on 2026-08-10, both flagged out of date). Independent of the
       # system plane above: a consumer picks per host, and neither is forced.

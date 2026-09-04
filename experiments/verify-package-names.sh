@@ -24,12 +24,12 @@
 # see lib/agents.nix's header). That policy is enforced at eval time by checks/agents-eval.nix, so
 # it is not re-checked here.
 #
-# THE SECOND DELIVERY MODE IS CHECKED HERE TOO, and it needs this file more than the first one
-# does. `upstream.url` in lib/agents.nix is a vendor-controlled URL that can 404, move, or start
+# THE SECOND DELIVERY PLANE IS CHECKED HERE TOO, and it needs this file more than the first one
+# does. An installer `upstream.url` is a vendor-controlled URL that can 404, move, or start
 # answering with an HTML error page, and none of that changes anything in this repo. checks/ cannot
 # see it (a pure evaluation has no network) and checks/upstream-install.nix deliberately stubs curl
-# so it tests behaviour rather than the internet. So the live question -- does each installer still
-# answer, and is what comes back still a shell script -- is asked here, by hand.
+# so it tests behaviour rather than the internet. The npx path has the same moving fact at the npm
+# registry, so its unversioned package spec is probed here too.
 #
 # The AUR pass also reports each package's VERSION and out-of-date flag rather than just its
 # existence. That is not decoration: an AUR name that exists but is ten releases behind is the
@@ -69,13 +69,30 @@ catalogue_upstreams() {
       groups = builtins.attrValues cat;
       pairs = builtins.concatLists (map (g:
         map (k: { name = k; entry = g.${k}; }) (builtins.attrNames g)) groups);
-      want = builtins.filter (p: p.entry.upstream != null) pairs;
+      want = builtins.filter
+        (p: p.entry.upstream != null && p.entry.upstream.kind == "installer") pairs;
     in builtins.concatStringsSep " "
       (map (p: "${p.name}|${p.entry.upstream.url}|${p.entry.upstream.runner}") want)
   ' | sed 's/^"//; s/"$//'
 }
 
 read -r -a upstreams <<<"$(catalogue_upstreams)"
+
+catalogue_npx_packages() {
+  nix-instantiate --eval --strict --expr '
+    let
+      cat = import ./lib/agents.nix { };
+      groups = builtins.attrValues cat;
+      pairs = builtins.concatLists (map (g:
+        map (k: { name = k; entry = g.${k}; }) (builtins.attrNames g)) groups);
+      want = builtins.filter
+        (p: p.entry.upstream != null && p.entry.upstream.kind == "npx") pairs;
+    in builtins.concatStringsSep " "
+      (map (p: "${p.name}|${p.entry.upstream.package}") want)
+  ' | sed 's/^"//; s/"$//'
+}
+
+read -r -a npx_packages <<<"$(catalogue_npx_packages)"
 
 # Derivative repository names that differ from the plain-Arch/AUR floor, as `distro|package`
 # pairs. These cannot be verified by the Arch API or AUR RPC because the derivative owns them.
@@ -166,6 +183,22 @@ for triple in "${upstreams[@]}"; do
       ;;
   esac
   rm -f "$body"
+done
+
+echo
+echo "== Vendor npx packages (upstream delivery plane) -- ${#npx_packages[@]} entry/entries =="
+for pair in "${npx_packages[@]}"; do
+  IFS='|' read -r key package <<<"$pair"
+  encoded="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$package")"
+  info="$(curl -sf "https://registry.npmjs.org/$encoded" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["dist-tags"]["latest"])' \
+    2>/dev/null || true)"
+  if [[ "$info" == "$package "* ]]; then
+    echo "OK   $key -- $info"
+  else
+    echo "FAIL $key -- npm package $package did not resolve with a latest tag"
+    status=1
+  fi
 done
 
 echo

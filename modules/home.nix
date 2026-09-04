@@ -1,6 +1,8 @@
 #
-# nixagent's HOME-MANAGER plane: the second delivery mode. Runs each selected tool's OWN upstream
-# installer, once, into that vendor's own per-user prefix, and puts the result on PATH.
+# nixagent's HOME-MANAGER plane: the second delivery mode. Uses each selected tool's OWN upstream
+# delivery path, once, in the user's home and puts the result on PATH. Most entries run a vendor
+# installer; an `npx` entry gets a small unversioned dispatcher around the vendor-documented npm
+# invocation, leaving npm rather than Nix to own the fetched harness.
 #
 # WHY THIS PLANE EXISTS. ./nixagent.nix publishes pacman/AUR package names for a host that
 # reconciles distro packages. Two kinds of host get nothing useful out of that:
@@ -14,12 +16,12 @@
 #     ships several times a week, and for a fast enough project it pins as badly as nixpkgs would.
 #
 # THE CONTRACT, stated once here and enforced in ../lib/install-upstream.sh: nix's job is to make
-# sure the tool EXISTS and is on PATH. Nix never owns the binary, never learns its version, never
-# rewrites it. There is deliberately no `home.packages` entry for an AGENT and no `home.file` for
-# a binary. A selected client may declare ordinary distro runtime ground there -- Codex needs
-# `bubblewrap` -- without putting the client itself in the store. checks/home-eval.nix holds that
-# boundary. Afterwards the tool's own `update` command keeps working, which is the entire reason to
-# install it this way rather than any other.
+# sure the tool EXISTS and is on PATH. Nix never owns the client payload and never pins its
+# version. There is deliberately no `home.packages` entry for an AGENT and no `home.file` for a
+# binary. A selected client may declare ordinary distro runtime ground there -- Codex needs
+# `bubblewrap`; DeepSeek Harness needs Node and pnpm -- without putting the client itself in the
+# store. checks/home-eval.nix holds that boundary. Installer-delivered clients retain their own
+# updater; npx-delivered clients resolve through npm's own mutable cache on launch.
 #
 # WHY HOME-MANAGER AND NOT system-manager/NixOS. The installers put things under $HOME and refuse
 # to run as root (Anthropic's exits with an explanation if invoked under sudo). A per-user prefix
@@ -73,7 +75,8 @@ let
   # of this repo could find. The escaping itself is the standard one: close, escaped quote, reopen.
   shq = s: "'" + lib.replaceStrings [ "'" ] [ "'\\''" ] s + "'";
 
-  # One call line per selection, into the function ../lib/install-upstream.sh defines.
+  # One call line per installer selection, into the first function
+  # ../lib/install-upstream.sh defines.
   #
   # `${DRY_RUN_CMD:-}` is home-manager's own dry-run hook: it is empty during a real activation and
   # `echo` during `home-manager build`/`--dry-run`, so a dry run PRINTS the call instead of making
@@ -124,6 +127,32 @@ let
     ++ lib.optionals (t.upstream.args != [ ]) ([ "--" ] ++ map shq t.upstream.args)
   );
 
+  # DeepSeek Harness deliberately does not pretend its documented npx invocation is a shell
+  # installer. This renders a call into the library's second delivery function, which creates an
+  # unversioned dispatcher and smoke-tests the official package without choosing a global npm
+  # prefix or putting the client in the store.
+  npxCall = t: lib.concatStringsSep " " [
+    "\${DRY_RUN_CMD:-}"
+    "nixagent_install_npx"
+    "--name"
+    (shq t.name)
+    "--command"
+    (shq t.binary)
+    "--probe"
+    (shq t.upstream.installs)
+    "--package"
+    (shq t.upstream.package)
+    "--on-failure"
+    (shq cfg.onInstallFailure)
+    "--max-time"
+    (toString cfg.maxTimeSeconds)
+  ];
+
+  deliveryCall = t:
+    if t.upstream.kind == "installer" then installCall t
+    else if t.upstream.kind == "npx" then npxCall t
+    else throw "nixagent: unsupported upstream kind ${t.upstream.kind}";
+
   # ONE activation entry for the whole selection, not one per tool. The script body is inlined
   # once and called N times; N separate DAG entries would inline N copies of it and buy nothing,
   # since they would run in sequence anyway.
@@ -148,7 +177,7 @@ let
     after = [ "writeBoundary" ];
     data = ''
       ${pathPrelude}${builtins.readFile ../lib/install-upstream.sh}
-      ${lib.concatMapStringsSep "\n" installCall selected}
+      ${lib.concatMapStringsSep "\n" deliveryCall selected}
     '';
   };
 in
@@ -159,7 +188,7 @@ in
       default = [ ];
       example = [ "claude-code" "omp" ];
       description = ''
-        Which agents to install from their OWN upstream installer into this user's home, rather
+        Which agents to deliver through their OWN upstream mechanism into this user's home, rather
         than from pacman/AUR. Available: ${lib.concatStringsSep ", " (lib.attrNames installable)}.
 
         This is the delivery mode for a host with no distro package manager to reconcile (a NixOS
@@ -167,7 +196,7 @@ in
         behind upstream -- which the AUR measurably does for a fast-moving entry, see
         lib/agents.nix's own header.
 
-        The list is typed to the catalogue entries that HAVE a vendor installer. Naming one that
+        The list is typed to the catalogue entries that HAVE a vendor delivery path. Naming one that
         does not (`gemini-cli`, `chatgpt-desktop`, `claude-desktop` -- each records what was
         checked) fails at eval time, which is the point: the alternative is an activation that
         looks fine and installs nothing.
@@ -177,9 +206,10 @@ in
         real one has been in the project README the whole time. Re-probe before treating an
         installer-less entry as permanent; the catalogue records findings, not verdicts.
 
-        NIX DOES NOT OWN WHAT THIS INSTALLS. The installer runs once, when the tool is absent, and
-        never again while it is present; from then on the tool updates itself, which is the
-        property this whole repo exists to preserve. No version is pinned here and none can be.
+        NIX DOES NOT OWN THE CLIENT PAYLOAD. A vendor installer runs once, when the tool is absent,
+        and then its own updater takes over. An npx entry receives only an unversioned dispatcher
+        around the vendor's documented command; npm owns its mutable cache and resolves the client.
+        No client version is pinned here and none can be.
       '';
     };
 
@@ -214,7 +244,7 @@ in
         a delivered tool -- half the contract this module states.
 
         The directories come from the catalogue (`upstream.installs`), so they are whatever each
-        VENDOR chose: `~/.local/bin` for claude-code, codex, omp and Qwen Code,
+        vendor delivery method chose: `~/.local/bin` for claude-code, codex, DeepSeek Harness, omp and Qwen Code,
         `~/.opencode/bin` for opencode, and `~/.grok/bin` for Grok Build. Duplicates collapse.
 
         Turn it off only if the PATH is managed somewhere else, and know what it costs: every one
@@ -234,16 +264,16 @@ in
         map (p: "''${p}/bin") (with pkgs; [ curl bash coreutils gnutar gzip unzip ])
       '';
       description = ''
-        Directories prepended to `PATH` for the upstream install, and for nothing else. Empty by
+        Directories prepended to `PATH` for upstream delivery, and for nothing else. Empty by
         default, and on a host with an FHS it can stay that way -- `/usr/bin` already carries
         everything a vendor installer reaches for.
 
         IT CANNOT STAY EMPTY ON A NIX-MANAGED HOST, and the failure without it is not obvious.
         A home-manager activation runs from a systemd unit, not a login shell, so it inherits
-        neither the user's `PATH` nor `home.sessionPath`. On NixOS that leaves the install with
+        neither the user's `PATH` nor `home.sessionPath`. On NixOS that leaves delivery with
         essentially nothing: no `curl` to fetch the installer, no `bash` to run it, and none of the
         `tar`/`unzip`/`uname` the installers themselves call. The preflight in
-        `lib/install-upstream.sh` tests the first two by name and reports this option, rather than
+        `lib/install-upstream.sh` tests required commands by name and reports this option, rather than
         letting the vendor script fail at 127 in a way that reads like a network fault.
 
         A LIST OF DIRECTORIES, not of packages, and deliberately so: this repo carries no nixpkgs

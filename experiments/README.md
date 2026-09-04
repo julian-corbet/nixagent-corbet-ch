@@ -18,8 +18,10 @@ file below.
     signal that a host wanting the tool current belongs on `nixagent.home.upstream`;
   - every `archPackageOn` derivative name checked with `pacman -Si` when the script is running on
     that derivative, so a CachyOS-only name cannot be added on catalogue faith alone;
-  - every `upstream.url` **fetched**, and its first line checked for a `#!`. A vendor installer can
-    404, move, or start answering with an HTML error page without anything in this repo changing.
+  - every installer `upstream.url` **fetched**, and its first line checked for a `#!`. A vendor
+    installer can 404, move, or start answering with an HTML error page without anything in this
+    repo changing;
+  - every npx package resolved from npm with a current `latest` tag, for the same reason.
 
   Reads all of it out of the catalogue rather than a second hand-kept list.
 

@@ -43,6 +43,7 @@ let
 
   empty = evalWith { };
   codexOnly = evalWith { cli = [ "openai-codex" ]; };
+  deepseekOnly = evalWith { cli = [ "deepseek-harness" ]; };
   opencodeOnly = evalWith { cli = [ "opencode" ]; };
 
   has = list: item: lib.elem item list;
@@ -86,8 +87,8 @@ let
     "every catalogue group has a matching selection option on the module" =
       lib.all (g: (evalWith { }) ? ${g}) (lib.attrNames cat);
 
-    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 7, desktop: 2, total: 9)" =
-      lib.length archAll.selected == 9
+    "every group contributes to \`selected\` -- selecting the whole catalogue resolves every entry (cli: 8, desktop: 2, total: 10)" =
+      lib.length archAll.selected == 10
       && lib.length archAll.selected == allSelectable;
 
     "each group's option is typed to its OWN keys -- a name from another group (or a typo) is refused at eval time, not silently ignored" =
@@ -138,9 +139,14 @@ let
       && !(has cachyAll.aurPackages "chatgpt-desktop-bin")
       && !(has (cachyAll.archPackages ++ cachyAll.aurPackages) "chatgpt-desktop");
 
-    "repository lifts are scoped to their entries; grok-build and omp remain AUR on CachyOS" =
-      sorted cachyAll.aurPackages == [ "grok-build" "oh-my-pi-bin" ]
-      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "grok-build" "oh-my-pi-bin" ];
+    "repository lifts are scoped to their entries; DeepSeek Harness, grok-build and omp remain AUR on CachyOS" =
+      sorted cachyAll.aurPackages == [ "deepseek-harness-bin" "grok-build" "oh-my-pi-bin" ]
+      && sorted archAll.aurPackages == [ "chatgpt-desktop" "claude-code" "claude-desktop" "deepseek-harness-bin" "grok-build" "oh-my-pi-bin" ];
+
+    "DeepSeek Harness uses the current AUR binary package on both distros and publishes dsh, not its package name" =
+      has archAll.aurPackages "deepseek-harness-bin"
+      && has cachyAll.aurPackages "deepseek-harness-bin"
+      && archAll.binaries.deepseek-harness == "dsh";
 
     "grok-build is AUR on every distro and publishes its actual grok command" =
       has archAll.aurPackages "grok-build" && has cachyAll.aurPackages "grok-build"
@@ -166,6 +172,7 @@ let
     "binaries maps every selection to its real command, not its package name" =
       archAll.binaries == {
         claude-code = "claude";
+        deepseek-harness = "dsh";
         gemini-cli = "gemini";
         grok-build = "grok";
         openai-codex = "codex";
@@ -198,8 +205,9 @@ let
       && codexOnly.archPackages == [ "openai-codex" ]
       && !(has codexOnly.archPackages "bubblewrap");
 
-    "bubblewrap is conditional on codex rather than a runtime default for every agent" =
-      opencodeOnly.runtimeArchPackages == [ ];
+    "Arch runtime additions are conditional on codex; DeepSeek's AUR package already declares its Node runtime" =
+      opencodeOnly.runtimeArchPackages == [ ]
+      && deepseekOnly.runtimeArchPackages == [ ];
 
     "binaries covers exactly the selection, no more -- an unselected entry contributes no command" =
       let d = evalWith { cli = [ "opencode" ]; }; in
@@ -220,13 +228,17 @@ let
           && lib.all lib.isString runtime.nixpkgsPackages)
         allEntries;
 
-    "codex alone declares bubblewrap on both Linux delivery planes" =
+    "codex declares bubblewrap on both Linux delivery planes and DeepSeek declares its NixOS-only Node runtime" =
       cat.cli.openai-codex.runtime == {
         archPackages = [ "bubblewrap" ];
         nixpkgsPackages = [ "bubblewrap" ];
       }
+      && cat.cli.deepseek-harness.runtime == {
+        archPackages = [ ];
+        nixpkgsPackages = [ "nodejs" "pnpm" ];
+      }
       && lib.all (t: !(t ? runtime))
-        (lib.filter (t: t.binary != "codex") allEntries);
+        (lib.filter (t: t.binary != "codex" && t.binary != "dsh") allEntries);
 
     "`archRepoOn` only ever appears on an entry that is AUR-only upstream -- on an official-repo entry it would be a no-op that reads like a promise" =
       lib.all (t: !(t ? archRepoOn) || (t.aur or false))
@@ -252,23 +264,37 @@ let
         (lib.filter (t: t.binary != "chatgpt") allEntries);
 
     # ── The SECOND delivery mode's catalogue half ─────────────────────────────────────────────
-    # ../modules/home.nix runs `upstream.url` with `upstream.runner` and then probes
-    # `upstream.installs`. Every one of those is a string that reaches a shell or a filesystem
+    # ../modules/home.nix runs the delivery method selected by `upstream.kind` and then probes
+    # `upstream.installs`. Every one of those values reaches a shell or a filesystem
     # test at activation time on a real machine, so the shape is asserted here where a typo costs
     # a failed `nix flake check` rather than a failed switch on three hosts.
 
-    "every catalogue entry carries an `upstream` field -- null where the vendor ships no installer, so a blank cannot be mistaken for an unresearched entry" =
+    "every catalogue entry carries an `upstream` field -- null where the vendor ships no delivery path, so a blank cannot be mistaken for an unresearched entry" =
       lib.all (t: t ? upstream) allEntries;
 
-    "every non-null `upstream` names an https URL, an interpreter that exists, an args LIST and an installed path" =
+    "every non-null `upstream` names one supported delivery kind and an installed command path" =
       lib.all
         (t:
-          lib.isString t.upstream.url
-          && lib.hasPrefix "https://" t.upstream.url
-          && lib.elem t.upstream.runner [ "bash" "sh" ]
-          && lib.isList t.upstream.args
-          && lib.all lib.isString t.upstream.args
+          lib.elem t.upstream.kind [ "installer" "npx" ]
           && lib.isString t.upstream.installs)
+        withUpstream;
+
+    "installer entries carry an HTTPS script/runner/args tuple; the npx entry carries an unversioned official package spec instead" =
+      lib.all
+        (t:
+          if t.upstream.kind == "installer" then
+            lib.isString t.upstream.url
+            && lib.hasPrefix "https://" t.upstream.url
+            && lib.elem t.upstream.runner [ "bash" "sh" ]
+            && lib.isList t.upstream.args
+            && lib.all lib.isString t.upstream.args
+            && !(t.upstream ? package)
+          else
+            t.upstream.kind == "npx"
+            && t.upstream.package == "@deepseek-ai/dsh"
+            && !(t.upstream ? url)
+            && !(t.upstream ? runner)
+            && !(t.upstream ? args))
         withUpstream;
 
     # The loader preflight is gated on this and nothing else, so a missing field would read as
@@ -346,11 +372,11 @@ let
     # This list GREW on 2026-08-11 and the assertion is here to make that visible when it happens:
     # openai-codex moved out of the null set because the 403 it was recorded on came from a URL the
     # vendor never used. Updating this line is the moment to write down what was actually probed.
-    "exactly the researched entries carry a vendor installer -- only the two desktop apps and gemini-cli carry recorded nulls" =
+    "exactly the researched entries carry an upstream delivery path -- only the two desktop apps and gemini-cli carry recorded nulls" =
       sorted
         (lib.attrNames (lib.filterAttrs (_: t: t.upstream != null)
           (lib.foldl' (acc: g: acc // cat.${g}) { } (lib.attrNames cat))))
-      == [ "claude-code" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
+      == [ "claude-code" "deepseek-harness" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
 
     # codex is the ONLY entry whose interactive prompt is suppressed by an environment variable
     # instead of a flag, and losing it turns a `home-manager switch` typed at a terminal into a
@@ -362,9 +388,10 @@ let
     # The measured fact behind `needsDynamicLoader = false`, pinned separately from the field-shape
     # assertion above: codex ships musl-static, so flagging it would demand nix-ld on hosts that
     # can run it bare. If a future release starts shipping a glibc build this must flip WITH it.
-    "codex and grok need no dynamic loader -- both are static PIEs with no INTERP segment" =
+    "codex and grok need no dynamic loader; DeepSeek's npx dispatcher uses the declared Nix runtime" =
       cat.cli.openai-codex.upstream.needsDynamicLoader == false
       && cat.cli.grok-build.upstream.needsDynamicLoader == false
+      && cat.cli.deepseek-harness.upstream.needsDynamicLoader == false
       && lib.all (n: cat.cli.${n}.upstream.needsDynamicLoader == true)
         [ "claude-code" "opencode" "omp" "qwen-code" ];
   };

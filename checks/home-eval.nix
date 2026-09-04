@@ -45,6 +45,7 @@ let
   noPath = evalWith { upstream = [ "claude-code" ]; addToPath = false; };
   tuned = evalWith { upstream = [ "omp" ]; connectTimeoutSeconds = 3; maxTimeSeconds = 42; };
   codexOnly = evalWith { upstream = [ "openai-codex" ]; };
+  deepseekOnly = evalWith { upstream = [ "deepseek-harness" ]; };
   newHarnesses = evalWith { upstream = [ "grok-build" "qwen-code" ]; };
 
   script = c: c.home.activation.nixagentUpstream.data;
@@ -56,6 +57,9 @@ let
   # `nixagent_install_upstream --name` rather than the bare function name is what separates a CALL
   # from the definition and from the usage comment above it.
   callLines = c: lib.filter (l: contains "nixagent_install_upstream --name" l)
+    (lib.splitString "\n" (script c));
+
+  npxCallLines = c: lib.filter (l: contains "nixagent_install_npx --name" l)
     (lib.splitString "\n" (script c));
 
   installableNames = lib.attrNames
@@ -86,6 +90,10 @@ let
       codexOnly.home.packages == [ pkgs.bubblewrap ]
       && codexOnly.home.file == { };
 
+    "DeepSeek installs only Node and pnpm runtime ground from nixpkgs, never the harness payload itself" =
+      deepseekOnly.home.packages == [ pkgs.nodejs pkgs.pnpm ]
+      && deepseekOnly.home.file == { };
+
     "no version, hash or store path is baked into the rendered script -- the vendor's installer decides the version, every time" =
       !(contains "sha256" (script allThree))
       && !(contains "/nix/store" (script allThree))
@@ -100,12 +108,24 @@ let
     "the installer function is inlined ONCE and called once per selection -- one DAG entry, not one copy of the script per tool" =
       lib.attrNames (allThree.home.activation) == [ "nixagentUpstream" ]
       && occurrences "nixagent_install_upstream() {" (script allThree) == 1
+      && occurrences "nixagent_install_npx() {" (script allThree) == 1
       && lib.length (callLines allThree) == 3
       && lib.length (callLines claudeOnly) == 1;
 
     "EVERY call honours home-manager's dry-run hook -- `home-manager build` must PRINT the install, never perform it" =
       lib.all (l: lib.hasPrefix "\${DRY_RUN_CMD:-} nixagent_install_upstream --name" l)
-        (callLines allThree);
+        (callLines allThree)
+      && lib.all (l: lib.hasPrefix "\${DRY_RUN_CMD:-} nixagent_install_npx --name" l)
+        (npxCallLines deepseekOnly);
+
+    "DeepSeek renders the official unversioned npm package through the distinct npx delivery path" =
+      lib.length (npxCallLines deepseekOnly) == 1
+      && contains "--name 'deepseek-harness'" (lib.head (npxCallLines deepseekOnly))
+      && contains "--command 'dsh'" (lib.head (npxCallLines deepseekOnly))
+      && contains "--probe '.local/bin/dsh'" (lib.head (npxCallLines deepseekOnly))
+      && contains "--package '@deepseek-ai/dsh'" (lib.head (npxCallLines deepseekOnly))
+      && !(contains "0.1.2" (lib.head (npxCallLines deepseekOnly)))
+      && callLines deepseekOnly == [ ];
 
     "the probe is the catalogue's own installs path, and the command is the command -- not the catalogue key and not the package name" =
       contains "--probe '.local/bin/claude'" (script claudeOnly)
@@ -200,7 +220,8 @@ let
     "the timeouts are rendered, so an unreachable network fails instead of hanging the activation forever" =
       contains "--connect-timeout 3" (script tuned)
       && contains "--max-time 42" (script tuned)
-      && contains "--connect-timeout 10 --max-time 600" (script claudeOnly);
+      && contains "--connect-timeout 10 --max-time 600" (script claudeOnly)
+      && contains "--max-time 600" (lib.head (npxCallLines deepseekOnly));
 
     # ── PATH ──────────────────────────────────────────────────────────────────────────────────
     # The vendors do not agree on a prefix: claude-code and omp use ~/.local/bin, opencode uses
@@ -239,6 +260,15 @@ let
       }
       && newHarnesses.home.sessionPath == [ "/home/tester/.grok/bin" "/home/tester/.local/bin" ];
 
+    "DeepSeek publishes the dsh dispatcher path and keeps its runtime on the home profile" =
+      deepseekOnly.nixagent.home.paths == {
+        deepseek-harness = "/home/tester/.local/bin/dsh";
+      }
+      && deepseekOnly.nixagent.home.binaries == {
+        deepseek-harness = "dsh";
+      }
+      && deepseekOnly.home.sessionPath == [ "/home/tester/.local/bin" ];
+
     # ── The type is the documentation ─────────────────────────────────────────────────────────
     # An entry with `upstream = null` has no vendor installer (each records what was checked).
     # Selecting one must be an EVAL error, not an activation that fetches nothing: `deepSeq`
@@ -259,7 +289,7 @@ let
       && codexOnly.nixagent.home.binaries == { openai-codex = "codex"; };
 
     "the selectable set is DERIVED from the catalogue, not hand-listed here or in the module" =
-      sortedList installableNames == [ "claude-code" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
+      sortedList installableNames == [ "claude-code" "deepseek-harness" "grok-build" "omp" "openai-codex" "opencode" "qwen-code" ];
   };
 
   failed = lib.attrNames (lib.filterAttrs (_: passed: !passed) results);

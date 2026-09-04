@@ -42,7 +42,7 @@
 # addition that names a real nixpkgs attribute fails `nix flake check` rather than quietly opening
 # the door this repo was drawn to keep shut.
 #
-# nixpkgs really does carry six of the seven CLIs. Force-evaluated -- not `hasAttrByPath` alone,
+# nixpkgs really does carry six of the eight CLIs. Force-evaluated -- not `hasAttrByPath` alone,
 # which cannot tell a live attribute from a rename-to-throw. The original five were measured
 # 2026-08-11 against nixpkgs-unstable HEAD d482ef84; the Grok and Qwen rows were measured
 # 2026-09-04. Each uses its project's release feed and the Arch package API alongside, because
@@ -56,6 +56,7 @@
 #     omp             -- absent --       17.2.2 (AUR, flagged out of date)   17.2.12
 #     grok-build      1.0.5              1.0.13 (AUR)        1.0.13
 #     qwen-code       0.16.0             0.21.2 (extra)      0.23.0
+#     deepseek-harness -- absent --       0.1.2rc.1 (AUR)     0.1.2-rc.1
 #
 # READ THAT TABLE HONESTLY: nixpkgs is not uniformly behind. It is AHEAD of Arch for codex and for
 # claude-code, level for opencode's packaging lag, and catastrophically behind only for gemini-cli
@@ -93,9 +94,12 @@
 # a stale nixpkgs derivation wearing a different hat. A packager is a human in the loop of a
 # project that ships several times a week.
 #
-# So a SECOND delivery mode exists alongside the distro one: run the VENDOR's own installer into
-# the vendor's own per-user prefix, which is what these projects actually support and test, and
-# which leaves `<tool> update` working afterwards. The two modes are chosen PER HOST by the
+# So a SECOND delivery plane exists alongside the distro one: use the VENDOR's own mutable
+# per-user delivery mechanism, which is what these projects actually support and test. Usually
+# that is the vendor's installer and leaves `<tool> update` working afterwards. DeepSeek Harness
+# is the one different case: its official invocation is `npx @deepseek-ai/dsh`, so the plane writes
+# an unversioned `dsh` dispatcher around that command and lets npm's cache own the payload. The two
+# planes are chosen PER HOST by the
 # consumer -- pacman/AUR on an Arch box that already reconciles packages, upstream on a NixOS box
 # that has no such reconciler and would otherwise get nothing at all. Neither is forced, and this
 # file makes no attempt to rank them: which one is right is a fact about the host.
@@ -114,11 +118,11 @@
 # carries a live record, because the URL that answered 403 was never the vendor's (see that entry).
 # Re-probe before concluding a tool is unreachable; a 403 is a fact about a URL, not about a tool.
 #
-# The other candidate ways out have been considered and are NOT accepted as an upstream mode:
+# The other candidate way out has been considered and is still NOT accepted as an upstream mode:
 # `npm install -g` installs into whichever node prefix the host happens to have configured, which
-# makes `installs` a property of the host rather than of the tool -- if that is ever wanted, the
-# prefix belongs on a module option and the package name in a field of its own, not smuggled into
-# this one. Nothing below invents either.
+# makes `installs` a property of the host rather than of the tool. DeepSeek's `npx` method does not
+# pretend otherwise: no global npm prefix is invented and no package is pinned or copied into one;
+# a small dispatcher runs the exact vendor-documented command and npm owns its own cache.
 #
 # Mechanically the two modes live on different planes: `arch`/`aur`/`archRepoOn`/`archPackageOn` feed
 # ../modules/nixagent.nix (system-manager, publishes package-name lists), `upstream` feeds
@@ -149,9 +153,11 @@
 #               emitted only when that derivative's repository is the selected source.
 # `nixpkgs`     always null. See above. The field is present rather than omitted so that a reader
 #               cannot mistake the policy for an oversight.
-# `upstream`    the vendor's own per-user installer, or null. Present on EVERY entry for the same
+# `upstream`    the vendor's own per-user delivery method, or null. Present on EVERY entry for the same
 #               reason `nixpkgs` is -- checks/agents-eval.nix asserts the field exists, so "this
-#               tool has no vendor installer" is a recorded finding rather than a blank. Shape:
+#               tool has no vendor delivery path" is a recorded finding rather than a blank.
+#               Every non-null entry has `kind = "installer"` or `kind = "npx"` plus `installs`,
+#               the relative command path. Installer entries additionally carry:
 #
 #                 url       the installer, fetched over HTTPS.
 #                 runner    the interpreter to run it with. Not always bash: omp's is `#!/bin/sh`
@@ -218,6 +224,12 @@
 #                           made codex demand nix-ld on hosts that can run it bare -- a false
 #                           prerequisite, which is precisely the false negative the paragraph above
 #                           says this field exists to avoid.
+#
+#               An `npx` entry instead carries `package`, the official unversioned npm package
+#               spec. modules/home.nix creates a dispatcher at `installs` that runs
+#               `npx --yes <package> "$@"`; the harness stays outside the store and npm owns its
+#               cache. Its runtime names Node and pnpm explicitly, so the dispatcher is usable in
+#               the interactive home as well as during its first activation-time smoke test.
 #
 #               The prefix belongs to the INSTALLER, not to this catalogue: `installs` records
 #               where each vendor puts things, it does not decide it. They do not agree with each
@@ -304,6 +316,7 @@
       # problem this repo exists to avoid. It also refuses to run under sudo (it would install
       # into root's home), which suits a home-manager activation exactly.
       upstream = {
+        kind = "installer";
         url = "https://claude.ai/install.sh";
         runner = "bash";
         args = [ ];
@@ -318,6 +331,54 @@
       note = ''
         Anthropic's agentic coding CLI (github.com/anthropics/claude-code). Package `claude-code`,
         command `claude`.
+      '';
+    };
+
+    deepseek-harness = {
+      # DeepSeek's own harness, not one of the similarly named community CLIs. Verified
+      # 2026-09-04 against the same three package sources as every distro-plane entry:
+      #
+      #   archlinux.org package search  -> no DeepSeek harness package in an official repository.
+      #   AUR RPC                       -> deepseek-harness-bin 0.1.2rc.1-1, current with npm.
+      #   AUR PKGBUILD                  -> the official @deepseek-ai/dsh tarball, installed as dsh.
+      #
+      # The `-bin` package is the right floor: it consumes the published npm artifact rather than
+      # cloning and rebuilding DeepSeek's large pnpm workspace on each workstation.
+      arch = "deepseek-harness-bin";
+      binary = "dsh";
+      nixpkgs = null;
+      aur = true;
+
+      # DeepSeek documents `npx @deepseek-ai/dsh web` as the supported npm launch, not a shell
+      # installer and not a global npm prefix. The upstream plane therefore writes an unversioned
+      # dispatcher at ~/.local/bin/dsh around that exact package invocation. npm owns the fetched
+      # payload and cache; Nix owns only Node/pnpm runtime ground. `--yes` suppresses npx's first-
+      # download prompt, which cannot be answered from a home-manager activation or menu launch.
+      upstream = {
+        kind = "npx";
+        package = "@deepseek-ai/dsh";
+        installs = ".local/bin/dsh";
+        needsDynamicLoader = false;
+      };
+
+      # Node 24.19.0 satisfies the repository's `^22.19.0 || >=24.0.0` engine declaration. pnpm
+      # is a real runtime dependency rather than build debris: `dsh plugin` forwards plugin
+      # operations to it. The AUR package declares both itself, so only the NixOS plane needs the
+      # explicit package names here.
+      runtime = {
+        archPackages = [ ];
+        nixpkgsPackages = [ "nodejs" "pnpm" ];
+      };
+
+      note = ''
+        DeepSeek AI's first-party developer-preview agent harness
+        (github.com/deepseek-ai/deepseek-harness). Catalogue key `deepseek-harness`, AUR package
+        `deepseek-harness-bin`, command `dsh`, official npm package `@deepseek-ai/dsh`.
+
+        The project explicitly warns that it is experimental, unaudited and compatibility-
+        breaking. Its default supported surface is a local Web UI (`dsh web`); it can execute
+        model-generated commands and load plugins, so the launcher does not invent an unrestricted
+        flag beyond the project's own defaults.
       '';
     };
 
@@ -391,6 +452,7 @@
       # shell rc, but modules/home.nix prepends the catalogue-derived install prefix to PATH before
       # invoking it, so its own `path_has_dir` gate leaves generated shell files alone.
       upstream = {
+        kind = "installer";
         url = "https://x.ai/cli/install.sh";
         runner = "bash";
         args = [ ];
@@ -462,6 +524,7 @@
       #      shell -- fish lands in the last). An activation inherits no login PATH, so without the
       #      prepend this installer edits a file nix believes it owns, on every fresh install.
       upstream = {
+        kind = "installer";
         url = "https://chatgpt.com/codex/install.sh";
         runner = "sh";
         args = [ ];
@@ -529,6 +592,7 @@
       # it -- and the PATH entry is this module's job anyway (`nixagent.home.addToPath` publishes
       # it through home.sessionPath, declaratively, where it survives).
       upstream = {
+        kind = "installer";
         url = "https://opencode.ai/install";
         runner = "bash";
         args = [ "--no-modify-path" ];
@@ -610,6 +674,7 @@
       # the packaging loop did not keep them within ten patch releases of upstream. A host that
       # wants this tool current uses `nixagent.home.upstream`, not the AUR.
       upstream = {
+        kind = "installer";
         url = "https://omp.sh/install";
         runner = "sh";
 
@@ -660,6 +725,7 @@
       # `qwen-code-bin` is newer today, but an official repository entry does not belong on the AUR
       # side of an atomic reconcile merely because the release race currently favours it.
       upstream = {
+        kind = "installer";
         url = "https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh";
         runner = "bash";
 

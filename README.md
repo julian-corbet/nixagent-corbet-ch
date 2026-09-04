@@ -1,14 +1,14 @@
 # nixagent
 
-**Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, Gemini CLI, Grok Build,
-Qwen Code, Codex, opencode and omp — declared per host and delivered by whichever of two
-mechanisms keeps the tool current: the distro's package manager, or the vendor's own installer.
+**Agentic AI clients — Claude Code, Claude Desktop, ChatGPT Desktop, DeepSeek Harness, Gemini CLI,
+Grok Build, Qwen Code, Codex, opencode and omp — declared per host and delivered by whichever of two
+planes keeps the tool current: the distro's package manager, or the vendor's own mutable delivery.
 Never nixpkgs, because they update themselves.**
 
 ## What this is
 
 A platform-neutral catalogue (`lib/agents.nix`) naming each agent client's package identity, its
-real command name and its vendor installer, plus **two modules for two delivery planes**:
+real command name and its vendor delivery method, plus **two modules for two delivery planes**:
 
 **The distro plane** (`modules/nixagent.nix`, system-manager) resolves a selection into two lists a
 host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries) and `desktop`
@@ -16,7 +16,7 @@ host's Arch package reconciler can consume. Two groups: `cli` (terminal binaries
 
 ```nix
 nixagent.distro = "cachyos";               # or "arch" (the default)
-nixagent.cli = [ "claude-code" "gemini-cli" "grok-build" "openai-codex" "opencode" "omp" "qwen-code" ];
+nixagent.cli = [ "claude-code" "deepseek-harness" "gemini-cli" "grok-build" "openai-codex" "opencode" "omp" "qwen-code" ];
 nixagent.desktop = [ "chatgpt-desktop" "claude-desktop" ];
 
 nixarch.packages.pacman =
@@ -24,14 +24,15 @@ nixarch.packages.pacman =
 nixarch.packages.aur    = config.nixagent.aurPackages;
 ```
 
-**The upstream plane** (`modules/home.nix`, home-manager) runs the tool's *own* installer into the
-vendor's *own* per-user prefix, once, and puts it on PATH. This is how a NixOS host gets these
+**The upstream plane** (`modules/home.nix`, home-manager) uses the tool's *own* mutable delivery
+method and puts its command on PATH. Usually that runs the vendor installer once; DeepSeek's
+documented npx launch gets an unversioned dispatcher and remains npm-owned. This is how a NixOS host gets these
 tools at all — *given the host requirement below* — and how any host gets one whose distro package
 has fallen behind.
 
 ```nix
-nixagent.home.upstream = [ "claude-code" "grok-build" "qwen-code" ];
-# Selectable: claude-code | grok-build | omp | openai-codex | opencode | qwen-code
+nixagent.home.upstream = [ "claude-code" "deepseek-harness" "grok-build" "qwen-code" ];
+# Selectable: claude-code | deepseek-harness | grok-build | omp | openai-codex | opencode | qwen-code
 ```
 
 That is the whole surface. One top-level option namespace, `nixagent`, like every repo in this
@@ -59,6 +60,7 @@ not a second reason — and treating it as one has already gone wrong here once.
 | `omp` | *absent* | 17.2.2 (AUR, flagged out of date) | 17.2.12 |
 | `grok-build` | 1.0.5 | 1.0.13 (AUR) | 1.0.13 |
 | `qwen-code` | 0.16.0 | 0.21.2 (`extra`) | 0.23.0 |
+| `deepseek-harness` | *absent* | 0.1.2rc.1 (AUR) | 0.1.2-rc.1 |
 
 Read the original five honestly: nixpkgs is **ahead** of Arch for two and level for a third. An
 earlier revision of this README claimed every entry was behind its distro package. That was true of
@@ -86,8 +88,8 @@ updater working.
 
 The prohibition is on nix owning the **tool**. It says nothing about nix supplying that tool's
 **runtime** or its installer's dependencies. `programs.nix-ld` providing a dynamic loader,
-`nixagent.home.extraPath` handing the vendor's script a nixpkgs `curl` and `bash`, and Codex's
-declarative `bubblewrap` runtime are not exceptions to the rule — they are the rule working. Nix
+`nixagent.home.extraPath` handing a delivery process its required commands, Codex's declarative
+`bubblewrap`, and DeepSeek Harness's Node/pnpm runtime are not exceptions to the rule — they are the rule working. Nix
 builds the ground the vendor's artifact stands on; the artifact stays the vendor's, mutable, and
 updatable by its own updater.
 
@@ -116,18 +118,20 @@ So there is a second plane, and its contract is one sentence:
 
 > **Nix ensures the tool exists and is on PATH. Nix never owns it.**
 
-No agent client in `home.packages`, no `home.file` for a binary, no hash and no version anywhere —
-`checks/home-eval.nix` asserts that boundary. A distro-owned runtime such as Codex's `bubblewrap`
-may be in `home.packages`; the agent itself never is. Afterwards `claude update`, `omp`'s
-self-update and the rest keep working, which is the whole point.
+No agent client payload in `home.packages`, no `home.file` for a binary, no hash and no version
+anywhere — `checks/home-eval.nix` asserts that boundary. Distro-owned runtime such as Codex's
+`bubblewrap` or DeepSeek's Node/pnpm may be in `home.packages`; the agent itself never is.
+Installer-delivered clients retain their own updater. The DeepSeek exception is explicit rather
+than disguised: a tiny `dsh` dispatcher runs the official unversioned `npx @deepseek-ai/dsh`
+invocation, and npm owns the payload and cache.
 
 The two modes answer different questions, and neither wins globally:
 
 | | distro plane | upstream plane |
 |---|---|---|
-| Updates via | `pacman -Syu`, with the host's other packages | the tool's own updater |
+| Updates via | `pacman -Syu`, with the host's other packages | the tool's own updater, or npm resolution for npx delivery |
 | Freshness bounded by | a packager | the vendor's own release |
-| Needs | a package manager and (for AUR) a helper | `curl`, a `$HOME`, **and a dynamic loader** |
+| Needs | a package manager and (for AUR) a helper | a `$HOME`, method-specific tools, and sometimes **a dynamic loader** |
 | Works on NixOS | no | yes — *only with `programs.nix-ld`*, see below |
 | Removes cleanly | **yes** — pacman owns the files | **no** — nothing owns the files |
 
@@ -137,7 +141,7 @@ exactly where it was. Full write-up:
 
 ### Host requirement: a dynamic loader for foreign binaries
 
-Four of the six catalogued installers deliver an **x86-64 glibc executable** declaring
+Four of the six shell installers deliver an **x86-64 glibc executable** declaring
 `INTERP /lib64/ld-linux-x86-64.so.2`, a path NixOS does not have.
 
 So on NixOS the upstream plane needs `programs.nix-ld`, and needs it *configured*, not merely
@@ -244,10 +248,13 @@ the mapping. Pointing a launcher at a package name is wrong for several entries.
 | Selection (catalogue key) | pacman package | command | vendor installer |
 |---|---|---|---|
 | `claude-code` | `claude-code` | `claude` | `claude.ai/install.sh` → `~/.local/bin/claude` |
+| `deepseek-harness` | `deepseek-harness-bin` | `dsh` | `npx @deepseek-ai/dsh` via `~/.local/bin/dsh` dispatcher |
 | `gemini-cli` | `gemini-cli` | `gemini` | — (npm/Node only; no installer, and no Linux release asset in any of the last 15 releases) |
+| `grok-build` | `grok-build` | `grok` | `x.ai/cli/install.sh` → `~/.grok/bin/grok` |
 | `openai-codex` | `openai-codex` | `codex` | `chatgpt.com/codex/install.sh` → `~/.local/bin/codex` |
 | `opencode` | `opencode` | `opencode` | `opencode.ai/install` → `~/.opencode/bin/opencode` |
 | `omp` | `oh-my-pi-bin` | `omp` | `omp.sh/install` → `~/.local/bin/omp` |
+| `qwen-code` | `qwen-code` | `qwen` | Qwen standalone installer → `~/.local/bin/qwen` |
 | `chatgpt-desktop` | Arch: `chatgpt-desktop`; CachyOS: `chatgpt-desktop-bin` | `chatgpt` | — (vendor Linux packages, no per-user installer script) |
 | `claude-desktop` | `claude-desktop` | `claude-desktop` | — (vendor Linux packages, no per-user installer script) |
 
@@ -257,10 +264,11 @@ the command is `omp`. Four names, no two the same. The key cannot be "the pacman
 is also what a consumer writes on the home-manager plane, where the AUR does not exist and a `-bin`
 suffix means nothing.
 
-`upstream = null` is a **recorded finding**, not a blank — each such entry carries what was checked
-and why npm was not accepted as a substitute. `nixagent.home.upstream` is typed to the entries that
-have an installer, so naming one that does not is an eval error rather than an activation that
-quietly fetches nothing.
+`upstream = null` is a **recorded finding**, not a blank — each such entry carries what was checked.
+`nixagent.home.upstream` is typed to entries that have a supported vendor delivery path, so naming
+one that does not is an eval error rather than an activation that quietly fetches nothing. The one
+npx entry is explicit and narrow: DeepSeek itself documents that invocation; it is not a generic
+license to turn every npm package into an invented global install.
 
 **A finding is not a verdict — re-probe it.** `openai-codex` carried `upstream = null` from
 2026-08-07 to 2026-08-11 on a recorded *403 from `openai.com/codex/install.sh`*. That URL is not
@@ -277,9 +285,9 @@ concluding the vendor ships nothing.
   not because agent configuration moved in. Per-user agent config lives wherever the consumer
   already keeps it, and `nixagent.home.binaries`/`paths` are published so it can point at the real
   command instead of guessing it from a package name.
-- **Updating anything.** On the distro plane that is `pacman -Syu`'s job; on the upstream plane it
-  is the tool's own updater's, and preserving that is the reason the plane exists. Nothing here
-  re-runs an installer over a tool that is already present.
+- **Updating client payloads.** On the distro plane that is `pacman -Syu`'s job; on the upstream
+  plane it is the tool's own updater, or npm's mutable resolution/cache for the documented npx
+  method. Nothing here re-runs a shell installer over a tool that is already present.
 - **Removing anything from the upstream plane.** Nothing owns those files, so deselecting a tool
   leaves the binary in place. Stated plainly rather than papered over — the distro plane does not
   have this limitation, and that is a real reason to prefer it on a host that has a reconciler.
@@ -292,7 +300,7 @@ concluding the vendor ships nothing.
 |---|---|
 | `flake.nix` | Flake entry point: `systemManagerModules`, `homeManagerModules`, `lib.catalogue`, `lib.policy`, `checks`. No `nixosModules` — see above. |
 | `lib/agents.nix` | The catalogue: one entry per agent client, with its pacman name, command, AUR status, vendor installer, runtime prerequisites, and the policy `nixpkgs = null` for the client itself. |
-| `lib/install-upstream.sh` | The upstream plane's shell half: one sourceable function that probes, fetches, runs and **verifies** a vendor installer. Inlined into the activation script by `modules/home.nix` and executed for real by `checks/upstream-install.nix` — one implementation, not a copy. |
+| `lib/install-upstream.sh` | The upstream plane's shell half: sourceable functions that probe and verify shell-installer and npx delivery. Inlined into the activation script by `modules/home.nix` and executed for real by `checks/upstream-install.nix` — one implementation, not a copy. |
 | `modules/nixagent.nix` | Distro plane: options, catalogue resolution, and the published `archPackages`/`aurPackages`/`binaries`. Also *is* the Arch backend — there is nothing platform-specific left for a second file to hold. |
 | `modules/home.nix` | Upstream plane: `nixagent.home.*`, one activation entry, `home.sessionPath`, and the published `binaries`/`paths`/`prefixes`. |
 | `checks/agents-eval.nix` | The distro plane and the catalogue's own shape, via `lib.evalModules`. |
@@ -307,8 +315,8 @@ concluding the vendor ships nothing.
 for the host's own reconciler; installs nothing itself, because on Arch there is no installer here
 to call.
 
-**Any host with home-manager, NixOS included (via home-manager):** the upstream plane. Installs the
-vendor's own build into the vendor's own per-user prefix and puts it on PATH. This is the *only*
+**Any host with home-manager, NixOS included (via home-manager):** the upstream plane. Uses the
+vendor's supported mutable delivery and puts the resulting command on PATH. This is the *only*
 way these tools arrive on a NixOS host from this repo — `nixosModules` remains deliberately absent,
 because it could only mean `environment.systemPackages` of the frozen derivations the nixpkgs rule
 refuses.
@@ -326,8 +334,8 @@ Three, all wired to `nix flake check`.
 an empty selection resolves to nothing on both lists; every catalogue group (`cli` and `desktop`)
 has a matching option and contributes; `archPackages` and `aurPackages` never intersect on *either*
 distro setting; every selection lands on exactly one list; every entry still carries
-`nixpkgs = null`; every entry carries an `upstream` field whose `installs` is relative to `$HOME`
-and ends in that entry's own `binary`; catalogue keys are unique across groups; `claude-code` moves
+`nixpkgs = null`; every entry carries an `upstream` field whose non-null value names a supported
+kind and whose `installs` is relative to `$HOME` and ends in that entry's own `binary`; catalogue keys are unique across groups; `claude-code` moves
 between the lists with `nixagent.distro` and is never on both; both desktop apps move from the AUR
 on plain Arch to CachyOS's repository; ChatGPT emits the correct different package name on each;
 and `omp` stays on the AUR list on every distro setting.
@@ -339,20 +347,22 @@ never install anything; the probe path and command taken from the catalogue rath
 the package name; `--binary` and `--no-modify-path` present where they are load-bearing; codex's
 `--env 'CODEX_NON_INTERACTIVE=1'` rendered as one quoted word and on no other entry; the loader
 flag emitted per entry and **absent** on codex; each vendor's own prefix on `home.sessionPath`,
-deduplicated; a selection with no vendor installer refused at eval time while `openai-codex` is
-accepted; and — mechanising the contract — **no agent client in `home.packages`, no `home.file`, no
-version, hash or store path anywhere in the rendered script**. Codex is the one selection with a
-`home.packages` member, and that member is exactly `pkgs.bubblewrap`, its distro-owned runtime.
+deduplicated; a selection with no vendor delivery path refused at eval time while `openai-codex`
+is accepted; DeepSeek renders exactly one dry-run-safe npx call for the unversioned official
+package; and — mechanising the contract — **no agent client payload in `home.packages`, no
+`home.file`, and no client version or hash in the rendered script**. Codex contributes only
+`pkgs.bubblewrap`; DeepSeek contributes only Node and pnpm runtime ground.
 
-**`upstream-install`** shellchecks `lib/install-upstream.sh` and then *runs* it against a stubbed
-`curl` through thirteen cases, including: it installs when the tool is absent; on a second
+**`upstream-install`** shellchecks `lib/install-upstream.sh` and then *runs* it against stubbed
+`curl` and `npx` programs, including: a shell installer runs when the tool is absent; on a second
 activation it invokes curl **zero** times *with the network stubbed to fail*, so even an attempt
 would be fatal; a 404 and an HTML error page and a non-zero installer each produce a labelled
 diagnostic carrying the installer's own output; an installer that exits 0 having installed nothing
 **fails**; a binary that installs but cannot start fails; `--env` values reach the installer's
 environment intact (spaces included) while a malformed one is a hard error that fetches nothing;
 the installer sees its own destination on `PATH` and therefore writes no shell rc file; `warn` mode
-does not abort but still prints; and a malformed call is never downgraded by `warn`.
+does not abort but still prints; a DeepSeek dispatcher forwards arguments intact and is likewise
+idempotent; and failed npm resolution leaves no absorbing executable behind.
 
 Every assertion in all three was confirmed to actually fail when the thing it guards is broken.
 For the behaviour suite that was done by mutation: removing the idempotency gate, the

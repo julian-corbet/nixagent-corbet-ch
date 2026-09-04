@@ -466,3 +466,197 @@ nixagent_install_upstream() {
   if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
   return 0
 }
+
+# Install the command surface for a tool whose VENDOR documents npx as the delivery mechanism.
+# This is intentionally not folded into nixagent_install_upstream: an npm package is not a shell
+# installer, has no URL/runner pair, and pretending otherwise would weaken all of that function's
+# download checks. The dispatcher contains no version or store path; npm owns the fetched payload
+# and its mutable cache, while the selected entry's runtime packages provide node/npx/pnpm.
+nixagent_install_npx() {
+  local name="" command_name="" probe_rel="" package=""
+  local on_failure="abort" max_time="600"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name | --command | --probe | --package | --on-failure | --max-time)
+        if [ "$#" -lt 2 ]; then
+          printf 'nixagent: internal error: %s requires a value\n' "$1" >&2
+          return 2
+        fi
+        case "$1" in
+          --name) name="$2" ;;
+          --command) command_name="$2" ;;
+          --probe) probe_rel="$2" ;;
+          --package) package="$2" ;;
+          --on-failure) on_failure="$2" ;;
+          --max-time) max_time="$2" ;;
+        esac
+        shift 2
+        ;;
+      *)
+        printf 'nixagent: internal error: unknown npx argument %s\n' "$1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  local missing=""
+  [ -n "$name" ] || missing="$missing --name"
+  [ -n "$command_name" ] || missing="$missing --command"
+  [ -n "$probe_rel" ] || missing="$missing --probe"
+  [ -n "$package" ] || missing="$missing --package"
+  if [ -n "$missing" ]; then
+    printf 'nixagent: internal error: missing required npx argument(s):%s\n' "$missing" >&2
+    return 2
+  fi
+
+  case "$on_failure" in
+    abort | warn) ;;
+    *)
+      printf 'nixagent: internal error: --on-failure must be abort or warn, got %s\n' "$on_failure" >&2
+      return 2
+      ;;
+  esac
+  case "$max_time" in
+    '' | *[!0-9]*)
+      printf 'nixagent: internal error: --max-time must be a positive integer, got %s\n' "$max_time" >&2
+      return 2
+      ;;
+  esac
+  if [ "$max_time" -eq 0 ]; then
+    printf 'nixagent: internal error: --max-time must be positive\n' >&2
+    return 2
+  fi
+
+  # The package is written as one bare shell word in the dispatcher. Restrict it to npm package-
+  # spec characters rather than attempting to serialize arbitrary shell input into a new script.
+  # This admits scoped packages such as @deepseek-ai/dsh and deliberately rejects whitespace,
+  # quotes, substitutions and redirections.
+  case "$package" in
+    *[!A-Za-z0-9@._/+:=-]*)
+      printf 'nixagent: internal error: unsafe npx package spec %s\n' "$package" >&2
+      return 2
+      ;;
+  esac
+
+  if [ -z "${HOME:-}" ]; then
+    printf 'nixagent: %s: internal error: HOME is unset, so the per-user command path cannot be resolved\n' "$name" >&2
+    return 2
+  fi
+
+  local probe="$HOME/$probe_rel"
+  if [ -x "$probe" ]; then
+    return 0
+  fi
+
+  printf 'nixagent: %s: %s is absent -- creating dispatcher for npx %s\n' \
+    "$name" "$probe" "$package"
+
+  local shadowed=""
+  shadowed="$(command -v "$command_name" 2>/dev/null)" || shadowed=""
+  if [ -n "$shadowed" ]; then
+    printf "nixagent: %s: NOTE -- '%s' already resolves to %s (another delivery plane, probably a distro package). The upstream dispatcher will shadow it wherever %s comes first on PATH.\n" \
+      "$name" "$command_name" "$shadowed" "$(dirname "$probe")" >&2
+  fi
+
+  local stage="" detail="" rc=0
+  local tmpdir="" log="" dispatcher=""
+  while :; do
+    local need=""
+    for need in node npx timeout mkdir chmod mv mktemp; do
+      if ! command -v "$need" >/dev/null 2>&1; then
+        stage="preflight"
+        detail="'$need' is not on PATH, and the $name npx delivery needs it. On a NixOS/nix-managed home, supply Node and coreutils through nixagent.home.extraPath; the client entry's runtime packages keep them on the interactive PATH afterwards"
+        break
+      fi
+    done
+    if [ -n "$stage" ]; then
+      break
+    fi
+
+    tmpdir="$(mktemp -d)" || tmpdir=""
+    if [ -z "$tmpdir" ] || [ ! -d "$tmpdir" ]; then
+      stage="preflight"
+      detail="could not create a temporary directory"
+      break
+    fi
+    log="$tmpdir/output"
+    dispatcher="$tmpdir/$command_name"
+    : >"$log"
+
+    {
+      printf '%s\n' '#!/bin/sh'
+      printf 'exec npx --yes %s "$@"\n' "$package"
+    } >"$dispatcher" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="install"
+      detail="could not write the npx dispatcher (exited $rc)"
+      break
+    fi
+    chmod 0755 "$dispatcher" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="install"
+      detail="could not make the npx dispatcher executable (chmod exited $rc)"
+      break
+    fi
+
+    rc=0
+    timeout "${max_time}s" "$dispatcher" --version >"$tmpdir/version" 2>"$log" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      stage="verify"
+      if [ "$rc" -eq 124 ]; then
+        detail="npx did not resolve and start $package within ${max_time}s"
+      else
+        detail="npx resolved $package but '$command_name --version' exited $rc"
+      fi
+      break
+    fi
+
+    rc=0
+    mkdir -p "$(dirname "$probe")" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      mv -f "$dispatcher" "$probe" || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+      stage="install"
+      detail="could not place the verified dispatcher at $probe (exited $rc)"
+      break
+    fi
+
+    local version_line=""
+    IFS= read -r version_line <"$tmpdir/version" || version_line="(no output)"
+    printf 'nixagent: %s: installed and verified %s -- %s\n' "$name" "$probe" "$version_line"
+    break
+  done
+
+  if [ -n "$stage" ]; then
+    local severity="FAILED"
+    if [ "$on_failure" = "warn" ]; then
+      severity='WARNING (nixagent.home.onInstallFailure = "warn")'
+    fi
+    {
+      printf '\n'
+      printf 'nixagent: %s: %s -- npx delivery did not complete\n' "$name" "$severity"
+      printf '    stage:     %s\n' "$stage"
+      printf '    detail:    %s\n' "$detail"
+      printf '    package:   %s (run with npx --yes)\n' "$package"
+      printf '    expected:  %s\n' "$probe"
+      if [ -n "$log" ] && [ -s "$log" ]; then
+        printf '    ---- npx output ----\n'
+        sed 's/^/    /' "$log"
+        printf '    --------------------\n'
+      fi
+      printf "    the '%s' command is NOT available for this user.\n" "$command_name"
+      printf '\n'
+    } >&2
+
+    if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
+    if [ "$on_failure" = "warn" ]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi
+  return 0
+}
